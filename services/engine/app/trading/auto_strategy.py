@@ -207,6 +207,7 @@ class AutoTradingStrategy:
             
         except Exception as e:
             logger.error(f"Error evaluating entry signal for {symbol}: {e}")
+            self.db_conn.rollback()  # Rollback failed transaction
             return None
     
     def execute_trade(self, signal: Dict) -> bool:
@@ -272,6 +273,7 @@ class AutoTradingStrategy:
                 
         except Exception as e:
             logger.error(f"Error executing trade: {e}")
+            self.db_conn.rollback()  # Rollback failed transaction
             return False
     
     def check_and_execute(self, symbol_id: int, symbol: str):
@@ -299,6 +301,7 @@ class AutoTradingStrategy:
             
         except Exception as e:
             logger.error(f"Error in check_and_execute for {symbol}: {e}")
+            self.db_conn.rollback()  # Rollback failed transaction
 
 
 def run_auto_trading(db_conn):
