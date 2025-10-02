@@ -7,7 +7,7 @@
             <label for="symbol" class="text-sm font-medium text-gray-700">Symbol</label>
             <select id="symbol" wire:model.live="symbol" class="border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
                 @foreach($symbols as $sym)
-                    <option value="{{ $sym }}">{{ $sym }}</option>
+                    <option value="{{ $sym }}">{{ \App\Models\Symbol::formatSymbol($sym) }}</option>
                 @endforeach
             </select>
         </div>
@@ -286,7 +286,7 @@
                 <div class="border border-gray-200 rounded-lg p-3">
                     <div class="flex items-center justify-between">
                         <div>
-                            <div class="font-bold text-lg">{{ $pos['symbol'] }}</div>
+                            <div class="font-bold text-lg">{{ \App\Models\Symbol::formatSymbol($pos['symbol']) }}</div>
                             <div class="text-sm text-gray-600">{{ $pos['qty'] }} shares @ ${{ number_format($pos['avg_entry_price'], 2) }}</div>
                         </div>
                         <div class="text-right">
@@ -309,7 +309,7 @@
 
         <!-- Trade History -->
         <div class="bg-white p-4 rounded-lg shadow">
-            <h3 class="text-sm font-semibold text-gray-700 mb-3">📜 Recent Trades</h3>
+            <h3 class="text-sm font-semibold text-gray-700 mb-3">📜 Recent Trades - {{ \App\Models\Symbol::formatSymbol($symbol) }}</h3>
             @if(empty($tradeHistory))
             <div class="text-center py-8 text-gray-500">
                 <div class="text-4xl mb-2">📝</div>
@@ -325,7 +325,7 @@
                             <span class="font-semibold {{ $trade['type'] === 'BUY' ? 'text-green-600' : 'text-red-600' }}">
                                 {{ $trade['type'] }}
                             </span>
-                            <span class="font-bold ml-2">{{ $trade['symbol'] }}</span>
+                            <span class="font-bold ml-2">{{ \App\Models\Symbol::formatSymbol($trade['symbol']) }}</span>
                         </div>
                         <div class="text-right">
                             <div class="text-sm font-semibold">${{ number_format($trade['price'], 2) }}</div>

@@ -192,7 +192,7 @@
                 <div class="flex items-center justify-between mb-2">
                     <div>
                         <span class="font-bold text-lg {{ $trade['type'] === 'BUY' ? 'text-green-700' : 'text-red-700' }}">
-                            {{ $trade['symbol'] }}
+                            {{ \App\Models\Symbol::formatSymbol($trade['symbol']) }}
                         </span>
                         <span class="ml-2 text-sm {{ $trade['type'] === 'BUY' ? 'text-green-600' : 'text-red-600' }}">
                             {{ $trade['type'] }}
