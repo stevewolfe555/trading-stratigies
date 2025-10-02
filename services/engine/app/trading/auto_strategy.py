@@ -26,6 +26,7 @@ from .alpaca_client import AlpacaTradingClient
 from .position_manager import PositionManager
 from .atr_calculator import get_atr_based_levels
 from ..strategy_manager import StrategyManager
+from ..strategies.auction_market_strategy import AuctionMarketStrategy
 
 
 class AutoTradingStrategy:
@@ -53,6 +54,9 @@ class AutoTradingStrategy:
         self.default_stop_loss_pct = float(os.getenv("STOP_LOSS_PCT", "2.0"))
         self.default_take_profit_pct = float(os.getenv("TAKE_PROFIT_PCT", "4.0"))
         self.enabled = True  # Master switch
+        
+        # Initialize shared strategy (will be updated per symbol)
+        self.strategy = None
     
     def is_enabled_for_symbol(self, symbol: str) -> bool:
         """
@@ -86,6 +90,8 @@ class AutoTradingStrategy:
         """
         Evaluate if we should enter a trade.
         
+        Uses shared AuctionMarketStrategy for evaluation logic.
+        
         Returns:
             Signal dict if entry conditions met, None otherwise
         """
@@ -98,6 +104,14 @@ class AutoTradingStrategy:
             min_aggression = self.get_parameter(symbol, 'min_aggression_score', self.default_min_aggression)
             atr_stop_mult = self.get_parameter(symbol, 'atr_stop_multiplier', 1.5)
             atr_target_mult = self.get_parameter(symbol, 'atr_target_multiplier', 3.0)
+            
+            # Initialize strategy with symbol-specific parameters
+            self.strategy = AuctionMarketStrategy({
+                'min_aggression_score': min_aggression,
+                'atr_stop_multiplier': atr_stop_mult,
+                'atr_target_multiplier': atr_target_mult
+            })
+            
             # Get current price
             cur = self.conn.cursor()
             cur.execute("""
@@ -142,7 +156,7 @@ class AutoTradingStrategy:
             if not flow_rows:
                 return None
             
-            # Calculate aggression score
+            # Extract flow metrics
             current_flow = flow_rows[0]
             buy_pressure = float(current_flow[1])
             sell_pressure = float(current_flow[2])
@@ -155,89 +169,41 @@ class AutoTradingStrategy:
             else:
                 cvd_momentum = 0
             
-            # Calculate aggression score (simplified)
-            aggression_score = 0
-            if abs(cvd_momentum) >= 1000:
-                aggression_score += 40
-            if buy_pressure >= 70 or sell_pressure >= 70:
-                aggression_score += 40
+            # Get ATR
+            cur.execute("""
+                SELECT atr FROM candles 
+                WHERE symbol_id = %s 
+                ORDER BY time DESC 
+                LIMIT 1
+            """, (symbol_id,))
             
-            # Determine direction
-            if buy_pressure >= 70 or cvd_momentum > 500:
-                flow_direction = 'BUY'
-            elif sell_pressure >= 70 or cvd_momentum < -500:
-                flow_direction = 'SELL'
+            atr_row = cur.fetchone()
+            if not atr_row or not atr_row[0]:
+                # Fallback: calculate ATR from get_atr_based_levels
+                _, _ = get_atr_based_levels(self.conn, symbol_id, current_price, 'buy')
+                atr = 1.0  # Fallback value
             else:
-                flow_direction = 'NEUTRAL'
+                atr = float(atr_row[0])
             
-            # Format readable log with emojis
-            state_emoji = {
-                'IMBALANCE_UP': '📈',
-                'IMBALANCE_DOWN': '📉',
-                'BALANCE': '➖',
-                'UNKNOWN': '❓'
-            }.get(market_state, '❓')
-            
-            flow_emoji = {
-                'BUY': '🟢',
-                'SELL': '🔴',
-                'NEUTRAL': '⚪'
-            }.get(flow_direction, '⚪')
-            
-            # Color-code aggression
-            if aggression_score >= 70:
-                agg_status = f"🔥 {aggression_score}"
-            elif aggression_score >= 40:
-                agg_status = f"⚡ {aggression_score}"
-            else:
-                agg_status = f"💤 {aggression_score}"
-            
-            logger.bind(module="AUTO-TRADE").info(
-                f"{symbol:6s} │ {state_emoji} {market_state:14s} │ {agg_status:8s} │ "
-                f"{flow_emoji} {flow_direction:7s} │ CVD: {cvd_momentum:+6d}"
+            # Use shared strategy to evaluate entry signal
+            signal = self.strategy.evaluate_entry_signal(
+                market_state=market_state,
+                confidence=confidence,
+                buy_pressure=buy_pressure,
+                sell_pressure=sell_pressure,
+                cvd_momentum=cvd_momentum,
+                current_price=current_price,
+                atr=atr,
+                symbol=symbol
             )
             
-            # Entry conditions
-            # 1. Market must be in IMBALANCE
-            if market_state not in ['IMBALANCE_UP', 'IMBALANCE_DOWN']:
-                return None
+            # Log evaluation
+            if signal:
+                logger.bind(module="AUTO-TRADE").info(
+                    f"🎯 ENTRY SIGNAL: {symbol} - {signal['reason']}"
+                )
             
-            # 2. Aggression score must be high enough
-            if aggression_score < min_aggression:
-                return None
-            
-            # 3. Flow direction must match market state
-            if market_state == 'IMBALANCE_UP' and flow_direction != 'BUY':
-                return None
-            
-            if market_state == 'IMBALANCE_DOWN' and flow_direction != 'SELL':
-                return None
-            
-            # Generate signal
-            side = 'buy' if market_state == 'IMBALANCE_UP' else 'sell'
-            
-            # Calculate stop loss and take profit using ATR
-            # This makes targets realistic based on actual volatility
-            stop_loss, take_profit = get_atr_based_levels(
-                self.conn,
-                symbol_id,
-                current_price,
-                side,
-                atr_multiplier_stop=1.5,  # 1.5x ATR for stop
-                atr_multiplier_target=3.0  # 3x ATR for target (2:1 R:R)
-            )
-            
-            return {
-                'symbol': symbol,
-                'side': side,
-                'entry_price': current_price,
-                'stop_loss': stop_loss,
-                'take_profit': take_profit,
-                'market_state': market_state,
-                'aggression_score': aggression_score,
-                'cvd_momentum': cvd_momentum,
-                'reason': f"{market_state} + Aggressive {flow_direction} (score: {aggression_score})"
-            }
+            return signal
             
         except Exception as e:
             logger.error(f"Error evaluating entry signal for {symbol}: {e}")
