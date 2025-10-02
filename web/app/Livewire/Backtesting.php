@@ -16,15 +16,25 @@ class Backtesting extends Component
     
     // Form inputs
     public array $selectedSymbols = [];
-    public float $years = 1.0;
-    public float $initialCapital = 100000;
-    public float $riskPerTrade = 1.0;
-    public int $maxPositions = 3;
+    public $years = 1.0;
+    public $initialCapital = 100000;
+    public $riskPerTrade = 1.0;
+    public $maxPositions = 3;
     
     // State
     public bool $showRunForm = false;
     public ?int $selectedRunId = null;
     public array $availableSymbols = [];
+    
+    protected function casts(): array
+    {
+        return [
+            'years' => 'float',
+            'initialCapital' => 'float',
+            'riskPerTrade' => 'float',
+            'maxPositions' => 'integer',
+        ];
+    }
     
     public function boot(BacktestService $backtestService): void
     {
