@@ -131,7 +131,7 @@
                     </div>
                     
                     <div class="text-xs text-gray-600">
-                        {{ implode(', ', array_slice($run->symbols, 0, 3)) }}{{ count($run->symbols) > 3 ? '...' : '' }}
+                        {{ implode(', ', array_slice($run->symbols ?? [], 0, 3)) }}{{ count($run->symbols ?? []) > 3 ? '...' : '' }}
                     </div>
                     
                     @if($run->isCompleted())
