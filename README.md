@@ -6,24 +6,41 @@
 ![Automation](https://img.shields.io/badge/automation-active-success)
 ![Chart](https://img.shields.io/badge/chart-TradingView%20Lightweight-blue)
 ![Database](https://img.shields.io/badge/database-TimescaleDB-orange)
-![Stocks](https://img.shields.io/badge/stocks-30%20monitored-blueviolet)
+![Stocks](https://img.shields.io/badge/stocks-44%20configured-blueviolet)
+![Providers](https://img.shields.io/badge/providers-multi--provider-green)
+![Code Quality](https://img.shields.io/badge/code-refactored-success)
 
 ## 🎯 Features
+
+### 🌐 Multi-Provider Support (NEW!)
+- ✅ **Alpaca Markets** - US stocks (30 symbols)
+- ✅ **IG Markets** - LSE stocks, indices, forex (14 symbols)
+- ✅ **Provider Router** - Intelligent symbol-to-provider mapping
+- ✅ **44 Symbols Total** - US stocks + LSE + indices + forex
+- ✅ **Level 1 & 2 Data** - Order book support ready
+
+### ⚙️ Strategy Management (NEW!)
+- ✅ **Database-Backed Config** - Per-symbol strategy settings
+- ✅ **Management UI** - Toggle switches and parameter sliders
+- ✅ **Real-Time Adjustment** - Change parameters without restart
+- ✅ **30 Strategies Active** - Auction Market on US stocks
+- ✅ **Risk Parameters** - Configurable aggression, ATR, position sizing
 
 ### 🤖 Automated Trading
 - ✅ **Live Execution** - Trades automatically on Alpaca paper account
 - ✅ **Market State Detection** - BALANCE vs IMBALANCE identification
-- ✅ **Aggressive Flow Analysis** - Institutional activity detection
+- ✅ **Aggressive Flow Analysis** - Institutional activity with volume ratio
 - ✅ **ATR-Based Targets** - Volatility-adjusted stop-loss/take-profit
-- ✅ **Risk Management** - 1% risk per trade, max 3 positions, daily limits
-- ✅ **30 Stocks Monitored** - Mag 7 + Tech/Finance/Healthcare/Energy/ETFs
+- ✅ **Risk Management** - Configurable per symbol, daily limits
+- ✅ **Position Management** - Automated entry/exit with Alpaca API
 
 ### 📊 Professional Dashboard
-- ✅ **Multi-Stock Overview** - Monitor all 30 stocks simultaneously
-- ✅ **Live P&L Tracking** - Real-time position monitoring with close buttons
-- ✅ **Account Overview** - Portfolio value, buying power, daily P&L
-- ✅ **Trade History** - Recent trades with entry reasons
-- ✅ **Engine Activity Monitor** - Live strategy evaluation logs
+- ✅ **Watchlist** - Real-time overview of 30 stocks
+- ✅ **Stock Detail** - Individual stock analysis with charts
+- ✅ **Strategies** - Management UI with live configuration
+- ✅ **Account** - Portfolio and trade tracking
+- ✅ **Live P&L Tracking** - Real-time position monitoring
+- ✅ **Trade History** - Recent trades with detailed info
 - ✅ **Auto-Refresh** - Updates every 3 seconds
 
 ### 📈 Technical Analysis
