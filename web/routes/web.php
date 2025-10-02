@@ -23,6 +23,7 @@ Route::view('account', 'account')
 
 // Backtesting - Run and view backtests
 Route::view('backtesting', 'backtesting')
+    ->middleware(['auth'])
     ->name('backtesting');
 
 Route::view('profile', 'profile')

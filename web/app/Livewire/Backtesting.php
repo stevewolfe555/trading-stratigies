@@ -51,10 +51,10 @@ class Backtesting extends Component
     {
         $this->validate([
             'selectedSymbols' => 'required|array|min:1',
-            'years' => 'required|numeric|min:0.01|max:10',
-            'initialCapital' => 'required|numeric|min:1000',
-            'riskPerTrade' => 'required|numeric|min:0.1|max:10',
-            'maxPositions' => 'required|integer|min:1|max:10',
+            'years' => ['required', 'numeric', 'min:0.01', 'max:10'],
+            'initialCapital' => ['required', 'numeric', 'min:1000'],
+            'riskPerTrade' => ['required', 'numeric', 'min:0.1', 'max:10'],
+            'maxPositions' => ['required', 'integer', 'min:1', 'max:10'],
         ]);
         
         $params = [
