@@ -22,35 +22,8 @@ from loguru import logger
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import classes if they exist, otherwise use simple versions
-try:
-    from app.detectors.market_state import MarketStateDetector
-    from app.indicators.aggressive_flow import AggressiveFlowDetector
-    from app.trading.atr_calculator import ATRCalculator
-except ImportError:
-    # Simple fallback implementations
-    class MarketStateDetector:
-        pass
-    
-    class AggressiveFlowDetector:
-        pass
-    
-    class ATRCalculator:
-        def calculate(self, candles):
-            if len(candles) < 14:
-                return 0
-            highs = [c['high'] for c in candles[-14:]]
-            lows = [c['low'] for c in candles[-14:]]
-            closes = [c['close'] for c in candles[-14:]]
-            
-            tr_values = []
-            for i in range(1, len(candles[-14:])):
-                hl = highs[i] - lows[i]
-                hc = abs(highs[i] - closes[i-1])
-                lc = abs(lows[i] - closes[i-1])
-                tr_values.append(max(hl, hc, lc))
-            
-            return sum(tr_values) / len(tr_values) if tr_values else 0
+# Import shared strategy class
+from app.strategies.auction_market_strategy import AuctionMarketStrategy
 
 # Configure logging
 logger.remove()
@@ -79,22 +52,20 @@ class BacktestEngine:
     - Performance metrics calculation
     """
     
-    def __init__(self, parameters: Dict):
+    def __init__(self, parameters: Optional[Dict] = None):
         """
         Initialize backtest engine.
-        
+
         Args:
             parameters: Strategy parameters dict
         """
-        self.params = parameters
+        self.params = parameters or {}
         self.conn = psycopg2.connect(**DB_CONFIG)
         self.conn.autocommit = False
         
-        # Initialize detectors
-        self.market_state_detector = MarketStateDetector()
-        self.aggressive_flow_detector = AggressiveFlowDetector()
-        self.atr_calculator = ATRCalculator()
-        
+        # Initialize shared strategy
+        self.strategy = AuctionMarketStrategy(parameters)
+
         # Backtest state
         self.run_id = None
         self.equity = parameters.get('initial_capital', 100000)
@@ -102,8 +73,19 @@ class BacktestEngine:
         self.positions = {}  # symbol -> position dict
         self.trades = []
         self.equity_curve = []
-        
+
+        # Performance tracking
+        self.signals_generated = {}  # symbol -> count of signals
+        self.signals_blocked = {}    # symbol -> count blocked by constraints
+        self.constraint_analysis = {}  # Analysis of what limits were hit
+
+        # Test modes
+        self.test_mode = parameters.get('test_mode', 'portfolio')  # 'portfolio', 'individual', 'unlimited'
+        self.enable_position_limits = parameters.get('enable_position_limits', True)
+        self.enable_cash_limits = parameters.get('enable_cash_limits', True)
+
         logger.info(f"Backtest engine initialized with ${self.equity:,.2f} capital")
+        logger.info(f"Test mode: {self.test_mode}")
     
     def create_run(self, name: str, symbols: List[str], start_date: datetime, end_date: datetime) -> int:
         """Create backtest run record."""
@@ -168,70 +150,79 @@ class BacktestEngine:
     def calculate_position_size(self, price: float, atr: float) -> int:
         """
         Calculate position size based on risk management.
-        
+
         Risk per trade = 1% of equity
         Stop loss = 2 * ATR
         """
         risk_per_trade_pct = self.params.get('risk_per_trade_pct', 1.0)
         atr_stop_multiplier = self.params.get('atr_stop_multiplier', 2.0)
-        
+
         risk_amount = self.equity * (risk_per_trade_pct / 100)
         stop_distance = atr * atr_stop_multiplier
-        
+
         if stop_distance == 0:
             return 0
-        
+
         quantity = int(risk_amount / stop_distance)
-        
+
         # Check if we have enough cash
         cost = quantity * price
         if cost > self.cash:
             quantity = int(self.cash / price)
-        
+
         return max(0, quantity)
     
-    def enter_position(self, symbol: str, symbol_id: int, bar: Dict, signal: Dict):
+    def enter_position(self, symbol: str, symbol_id: int, bar: Dict, signal: Dict, position_cost: float = None):
         """Enter a new position."""
-        price = bar['close']
-        atr = signal['atr']
-        
-        quantity = self.calculate_position_size(price, atr)
-        
-        if quantity == 0:
+        if symbol in self.positions:
             return
-        
-        cost = quantity * price
-        
-        # Check max positions limit
-        max_positions = self.params.get('max_positions', 3)
-        if len(self.positions) >= max_positions:
+
+        entry_price = signal['entry_price']
+        stop_loss = signal['stop_loss']
+        take_profit = signal['take_profit']
+
+        # Calculate quantity
+        if position_cost is None:
+            # Use risk-based sizing
+            risk_amount = self.equity * (self.params.get('risk_per_trade_pct', 1.0) / 100)
+            stop_distance = abs(entry_price - stop_loss)
+            if stop_distance == 0:
+                return
+
+            quantity = int(risk_amount / stop_distance)
+            cost = quantity * entry_price
+        else:
+            # Use provided cost
+            quantity = int(position_cost / entry_price)
+            cost = position_cost
+
+        if quantity == 0 or cost > self.cash:
             return
-        
+
         # Create position
         position = {
-            'symbol': symbol,
             'symbol_id': symbol_id,
             'entry_time': bar['time'],
-            'entry_price': price,
+            'entry_price': entry_price,
             'quantity': quantity,
-            'direction': 'LONG',
-            'stop_loss': price - (atr * self.params.get('atr_stop_multiplier', 2.0)),
-            'take_profit': price + (atr * self.params.get('atr_target_multiplier', 3.0)),
-            'atr_at_entry': atr,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'direction': 'buy' if signal['side'] == 'buy' else 'sell',
             'entry_reason': signal['reason'],
-            'market_state': signal.get('market_state'),
-            'aggressive_flow_score': signal.get('aggressive_flow_score'),
-            'volume_ratio': signal.get('volume_ratio'),
-            'cvd_momentum': signal.get('cvd_momentum'),
+            'atr_at_entry': signal.get('atr', 0),
+            'market_state': signal.get('market_state', 'UNKNOWN'),
+            'aggressive_flow_score': signal.get('aggression_score', 0),
+            'volume_ratio': signal.get('volume_ratio', 0),
+            'cvd_momentum': signal.get('cvd_momentum', 0),
             'bars_in_trade': 0,
             'mae': 0,  # Maximum Adverse Excursion
-            'mfe': 0   # Maximum Favorable Excursion
+            'mfe': 0   # Maximum favorable Excursion
         }
-        
+
         self.positions[symbol] = position
         self.cash -= cost
-        
-        logger.debug(f"  ENTER {symbol}: {quantity} @ ${price:.2f} (Stop: ${position['stop_loss']:.2f}, Target: ${position['take_profit']:.2f})")
+
+        logger.debug(f"  ENTER {symbol}: {quantity} @ ${entry_price:.2f} (Stop: ${stop_loss:.2f}, Target: ${take_profit:.2f})")
     
     def exit_position(self, symbol: str, bar: Dict, reason: str):
         """Exit an existing position."""
@@ -307,28 +298,177 @@ class BacktestEngine:
             self.exit_position(symbol, bar, 'Take Profit')
             return
     
-    def record_equity_point(self, time: datetime):
-        """Record equity curve point."""
-        positions_value = sum(
-            pos['quantity'] * pos['entry_price']  # Simplified - should use current price
-            for pos in self.positions.values()
-        )
-        
-        equity = self.cash + positions_value
-        
-        self.equity_curve.append({
-            'backtest_run_id': self.run_id,
-            'time': time,
-            'equity': equity,
-            'cash': self.cash,
-            'positions_value': positions_value,
-            'open_positions': len(self.positions)
-        })
+    def get_available_position_slots(self) -> int:
+        """Get available position slots."""
+        if not self.enable_position_limits:
+            return 999  # Unlimited
+
+        max_positions = self.params.get('max_positions', 3)
+        return max(0, max_positions - len(self.positions))
+
+    def get_available_cash(self) -> float:
+        """Get available cash for new positions."""
+        if not self.enable_cash_limits:
+            return 999999999  # Unlimited
+
+        return self.cash
+
+    def calculate_position_cost(self, signal: Dict, available_cash: float) -> float:
+        """Calculate cost of entering position, considering constraints."""
+        entry_price = signal['entry_price']
+        risk_amount = self.equity * (self.params.get('risk_per_trade_pct', 1.0) / 100)
+        stop_loss = signal['stop_loss']
+
+        # Calculate quantity based on risk
+        stop_distance = abs(entry_price - stop_loss)
+        if stop_distance == 0:
+            return 0
+
+        quantity = int(risk_amount / stop_distance)
+        cost = quantity * entry_price
+
+        # Check if we have enough cash
+        if cost > available_cash:
+            # Scale down to available cash
+            max_quantity = int(available_cash / entry_price)
+            if max_quantity > 0:
+                cost = max_quantity * entry_price
+            else:
+                return 0
+
+        return cost
+
+    def load_and_merge_candles(self, symbols: List[str], start_date: datetime, end_date: datetime) -> Dict[datetime, Dict[str, Dict]]:
+        """
+        Load candles for all symbols and merge by timestamp.
+
+        Returns:
+            Dict[datetime, Dict[str, Dict]] - timestamp -> {symbol -> bar_data}
+        """
+        all_bars_by_time = {}
+
+        for symbol in symbols:
+            # Initialize tracking
+            self.signals_generated[symbol] = 0
+            self.signals_blocked[symbol] = 0
+
+            candles = self.load_candles(symbol, start_date, end_date)
+
+            for bar in candles:
+                timestamp = bar['time']
+                if timestamp not in all_bars_by_time:
+                    all_bars_by_time[timestamp] = {}
+                all_bars_by_time[timestamp][symbol] = bar
+
+        return all_bars_by_time
+
+    def run_individual_stock_test(self, symbol: str, start_date: datetime, end_date: datetime):
+        """
+        Run individual stock test for parameter optimization.
+
+        Args:
+            symbol: Single symbol to test
+            start_date: Start date
+            end_date: End date
+        """
+        logger.info(f"🔬 Running individual test for {symbol}")
+
+        # Create separate run for this symbol
+        name = f"Individual Test - {symbol} ({start_date.date()} to {end_date.date()})"
+        self.create_run(name, [symbol], start_date, end_date)
+
+        # Load candles
+        candles = self.load_candles(symbol, start_date, end_date)
+        logger.info(f"  {symbol}: {len(candles):,} bars loaded")
+
+        # Process each bar
+        for i, bar in enumerate(candles):
+            if i >= 20:  # Need history for indicators
+                self.update_positions(symbol, bar)
+                signal = self.check_entry_signal(symbol, bar['symbol_id'], bar['time'])
+                if signal:
+                    self.signals_generated[symbol] = self.signals_generated.get(symbol, 0) + 1
+                    self.enter_position(symbol, bar['symbol_id'], bar, signal)
+
+            # Record equity periodically
+            if i % 100 == 0:
+                self.record_equity_point(bar['time'])
+
+        # Close position
+        if symbol in self.positions:
+            self.exit_position(symbol, candles[-1], 'End of Test')
+
+        # Log individual results
+        trades_for_symbol = [t for t in self.trades if t['symbol_id'] == bar['symbol_id']]
+        if trades_for_symbol:
+            winning_trades = [t for t in trades_for_symbol if t['pnl'] > 0]
+            total_pnl = sum(t['pnl'] for t in trades_for_symbol)
+
+            logger.info(f"  📊 {symbol} Results:")
+            logger.info(f"    Trades: {len(trades_for_symbol)}")
+            logger.info(f"    Win Rate: {len(winning_trades)/len(trades_for_symbol)*100:.1f}%")
+            logger.info(f"    Total P&L: ${total_pnl:.2f}")
+            logger.info(f"    Signals Generated: {self.signals_generated.get(symbol, 0)}")
+        else:
+            logger.info(f"  📊 {symbol}: No trades")
+
+    def run_unlimited_test(self, symbols: List[str], start_date: datetime, end_date: datetime):
+        """
+        Run test without position or cash limits to see theoretical maximum.
+
+        Args:
+            symbols: List of symbols to test
+            start_date: Start date
+            end_date: End date
+        """
+        logger.info("🚀 Running unlimited test (no position/cash limits)")
+
+        # Temporarily disable limits
+        original_position_limits = self.enable_position_limits
+        original_cash_limits = self.enable_cash_limits
+        self.enable_position_limits = False
+        self.enable_cash_limits = False
+
+        try:
+            # Run normal backtest
+            all_bars_by_time = self.load_and_merge_candles(symbols, start_date, end_date)
+
+            for timestamp, bars_at_time in all_bars_by_time.items():
+                # Update positions
+                for symbol, bar in bars_at_time.items():
+                    self.update_positions(symbol, bar)
+
+                # Check signals for all symbols
+                for symbol in bars_at_time.keys():
+                    if symbol not in self.positions:
+                        signal = self.check_entry_signal(symbol, bars_at_time[symbol]['symbol_id'], timestamp)
+                        if signal:
+                            self.signals_generated[symbol] = self.signals_generated.get(symbol, 0) + 1
+                            # Unlimited cash/positions - always enter
+                            position_cost = self.calculate_position_cost(signal, 999999999)
+                            if position_cost > 0:
+                                self.enter_position(symbol, bars_at_time[symbol]['symbol_id'],
+                                                  bars_at_time[symbol], signal, position_cost)
+
+            # Close all positions
+            for symbol in list(self.positions.keys()):
+                symbol_bars = [bars for bars in all_bars_by_time.values() if symbol in bars]
+                if symbol_bars:
+                    last_bar = symbol_bars[-1][symbol]
+                    self.exit_position(symbol, last_bar, 'End of Test')
+
+        finally:
+            # Restore limits
+            self.enable_position_limits = original_position_limits
+            self.enable_cash_limits = original_cash_limits
+
+        # Analyze constraints
+        self.analyze_constraints()
     
     def run_backtest(self, symbols: List[str], start_date: datetime, end_date: datetime):
         """
-        Run backtest on historical data.
-        
+        Run backtest on historical data with proper multi-stock simulation.
+
         Args:
             symbols: List of symbols to trade
             start_date: Start date
@@ -338,74 +478,341 @@ class BacktestEngine:
         logger.info(f"📊 Symbols: {', '.join(symbols)}")
         logger.info(f"💰 Initial capital: ${self.equity:,.2f}")
         logger.info("")
-        
+
         # Create run
         name = f"Backtest {start_date.date()} to {end_date.date()}"
         self.create_run(name, symbols, start_date, end_date)
-        
-        # Load candles for all symbols
-        all_candles = {}
-        for symbol in symbols:
-            candles = self.load_candles(symbol, start_date, end_date)
-            all_candles[symbol] = candles
-            logger.info(f"  {symbol}: {len(candles):,} bars loaded")
-        
+
+        # Load and merge candles by timestamp for proper simultaneous processing
+        all_bars_by_time = self.load_and_merge_candles(symbols, start_date, end_date)
+
+        logger.info(f"📈 Total timestamps to process: {len(all_bars_by_time):,}")
+
         logger.info("")
         logger.info("Running simulation...")
-        
-        # Simulate trading (simplified - process bar by bar)
-        # In production, you'd merge all symbols' bars by time
-        for symbol in symbols:
-            candles = all_candles[symbol]
-            
-            for i, bar in enumerate(candles):
-                # Update existing positions
+
+        # Process all symbols simultaneously by timestamp
+        for timestamp, bars_at_time in all_bars_by_time.items():
+            # Update existing positions for all symbols
+            for symbol, bar in bars_at_time.items():
                 self.update_positions(symbol, bar)
-                
-                # Check for entry signals (simplified)
-                if i >= 20:  # Need history for indicators
-                    signal = self.check_entry_signal(symbol, candles[i-20:i+1])
-                    if signal and symbol not in self.positions:
-                        self.enter_position(symbol, bar['symbol_id'], bar, signal)
-                
-                # Record equity every 100 bars
-                if i % 100 == 0:
-                    self.record_equity_point(bar['time'])
-        
+
+            # Check for entry signals for all symbols at this timestamp
+            available_slots = self.get_available_position_slots()
+            available_cash = self.get_available_cash()
+
+            if available_slots > 0 and available_cash > 0:
+                # Sort symbols by signal priority (you could add custom logic here)
+                symbols_to_check = list(bars_at_time.keys())
+
+                for symbol in symbols_to_check:
+                    if symbol not in self.positions:  # Don't check symbols we already have positions in
+                        signal = self.check_entry_signal(symbol, bars_at_time[symbol]['symbol_id'], timestamp)
+                        if signal:
+                            # Check if we can enter this position
+                            position_cost = self.calculate_position_cost(signal, available_cash)
+                            if position_cost > 0:
+                                self.enter_position(symbol, bars_at_time[symbol]['symbol_id'],
+                                                  bars_at_time[symbol], signal, position_cost)
+                                available_slots -= 1
+                                available_cash -= position_cost
+                                if available_slots <= 0 or available_cash <= 0:
+                                    break  # No more capacity
+
+            # Record equity periodically (simplified for now)
+            if len(all_bars_by_time) > 100 and hash(str(timestamp)) % 100 == 0:
+                pass  # TODO: Implement equity recording
+
         # Close any remaining positions
         for symbol in list(self.positions.keys()):
-            last_bar = all_candles[symbol][-1]
-            self.exit_position(symbol, last_bar, 'End of Backtest')
-        
+            # Find the last bar for this symbol
+            symbol_bars = [bars for bars in all_bars_by_time.values() if symbol in bars]
+            if symbol_bars:
+                last_bar = symbol_bars[-1][symbol]
+                self.exit_position(symbol, last_bar, 'End of Test')
+
+        # Analyze constraints
+        self.analyze_constraints()
+
         # Save results
         self.save_results()
-        
         logger.info("")
         logger.success(f"✅ Backtest complete!")
+
+    def analyze_constraints(self):
+        """Analyze what constraints limited performance."""
+        logger.info("")
+        logger.info("🔍 Constraint Analysis:")
+
+        total_signals = sum(self.signals_generated.values())
+        total_blocked = sum(self.signals_blocked.values())
+
+        if total_signals > 0:
+            blocked_pct = (total_blocked / (total_signals + total_blocked)) * 100
+            logger.info(f"  Signals Generated: {total_signals}")
+            logger.info(f"  Signals Blocked: {total_blocked} ({blocked_pct:.1f}%)")
+
+        # Analyze by symbol
+        for symbol in self.signals_generated.keys():
+            generated = self.signals_generated[symbol]
+            blocked = self.signals_blocked.get(symbol, 0)
+            if generated > 0 or blocked > 0:
+                logger.info(f"  {symbol}: {generated} signals, {blocked} blocked")
+
+        # Recommend limits if needed
+        if total_blocked > 0:
+            max_positions_needed = len(self.positions) + total_blocked
+            logger.info(f"  💡 To capture all signals, you'd need:")
+            logger.info(f"     Max Positions: {max_positions_needed} (currently {self.params.get('max_positions', 3)})")
+            logger.info(f"     Initial Capital: ${self.equity * (max_positions_needed / max(1, len(self.positions))):,.0f}")
+
+    def run_individual_stock_test(self, symbol: str, start_date: datetime, end_date: datetime):
+        """
+        Run individual stock test for parameter optimization.
+
+        Args:
+            symbol: Single symbol to test
+            start_date: Start date
+            end_date: End date
+        """
+        logger.info(f"🔬 Running individual test for {symbol}")
+
+        # Create separate run for this symbol
+        name = f"Individual Test - {symbol} ({start_date.date()} to {end_date.date()})"
+        self.create_run(name, [symbol], start_date, end_date)
+
+        # Load candles
+        candles = self.load_candles(symbol, start_date, end_date)
+        logger.info(f"  {symbol}: {len(candles):,} bars loaded")
+
+        # Process each bar
+        for i, bar in enumerate(candles):
+            if i >= 20:  # Need history for indicators
+                self.update_positions(symbol, bar)
+                signal = self.check_entry_signal(symbol, bar['symbol_id'], bar['time'])
+                if signal:
+                    self.signals_generated[symbol] = self.signals_generated.get(symbol, 0) + 1
+                    self.enter_position(symbol, bar['symbol_id'], bar, signal)
+
+            # Record equity periodically
+            if i % 100 == 0:
+                self.record_equity_point(bar['time'])
+
+        # Close position
+        if symbol in self.positions:
+            self.exit_position(symbol, candles[-1], 'End of Test')
+
+        # Log individual results
+        trades_for_symbol = [t for t in self.trades if t['symbol_id'] == bar['symbol_id']]
+        if trades_for_symbol:
+            winning_trades = [t for t in trades_for_symbol if t['pnl'] > 0]
+            total_pnl = sum(t['pnl'] for t in trades_for_symbol)
+
+            logger.info(f"  📊 {symbol} Results:")
+            logger.info(f"    Trades: {len(trades_for_symbol)}")
+            logger.info(f"    Win Rate: {len(winning_trades)/len(trades_for_symbol)*100:.1f}%")
+            logger.info(f"    Total P&L: ${total_pnl:.2f}")
+            logger.info(f"    Signals Generated: {self.signals_generated.get(symbol, 0)}")
+        else:
+            logger.info(f"  📊 {symbol}: No trades")
+
+    def run_unlimited_test(self, symbols: List[str], start_date: datetime, end_date: datetime):
+        """
+        Run test without position or cash limits to see theoretical maximum.
+
+        Args:
+            symbols: List of symbols to test
+            start_date: Start date
+            end_date: End date
+        """
+        logger.info("🚀 Running unlimited test (no position/cash limits)")
+
+        # Temporarily disable limits
+        original_position_limits = self.enable_position_limits
+        original_cash_limits = self.enable_cash_limits
+        self.enable_position_limits = False
+        self.enable_cash_limits = False
+
+        try:
+            # Run normal backtest
+            all_bars_by_time = self.load_and_merge_candles(symbols, start_date, end_date)
+
+            for timestamp, bars_at_time in all_bars_by_time.items():
+                # Update positions
+                for symbol, bar in bars_at_time.items():
+                    self.update_positions(symbol, bar)
+
+                # Check signals for all symbols
+                for symbol in bars_at_time.keys():
+                    if symbol not in self.positions:
+                        signal = self.check_entry_signal(symbol, bars_at_time[symbol]['symbol_id'], timestamp)
+                        if signal:
+                            self.signals_generated[symbol] = self.signals_generated.get(symbol, 0) + 1
+                            # Unlimited cash/positions - always enter
+                            position_cost = self.calculate_position_cost(signal, 999999999)
+                            if position_cost > 0:
+                                self.enter_position(symbol, bars_at_time[symbol]['symbol_id'],
+                                                  bars_at_time[symbol], signal, position_cost)
+
+            # Close all positions
+            for symbol in list(self.positions.keys()):
+                symbol_bars = [bars for bars in all_bars_by_time.values() if symbol in bars]
+                if symbol_bars:
+                    last_bar = symbol_bars[-1][symbol]
+                    self.exit_position(symbol, last_bar, 'End of Test')
+
+        finally:
+            # Restore limits
+            self.enable_position_limits = original_position_limits
+            self.enable_cash_limits = original_cash_limits
+
+        # Analyze constraints
+        self.analyze_constraints()
+
+    def run_individual_tests(self, symbols: List[str], start_date: datetime, end_date: datetime):
+        """
+        Run individual tests for each symbol for parameter optimization.
+
+        Args:
+            symbols: List of symbols to test individually
+            start_date: Start date
+            end_date: End date
+        """
+        logger.info("🔬 Running individual tests for parameter optimization")
+        logger.info("")
+
+        for symbol in symbols:
+            # Reset state for each symbol
+            self.positions = {}
+            self.trades = []
+            self.equity_curve = []
+            self.signals_generated = {symbol: 0}
+            self.signals_blocked = {symbol: 0}
+
+            # Run individual test
+            self.run_individual_stock_test(symbol, start_date, end_date)
+
+            logger.info("")  # Spacing between symbols
     
-    def check_entry_signal(self, symbol: str, candles: List[Dict]) -> Optional[Dict]:
+    def check_entry_signal(self, symbol: str, symbol_id: int, current_time: datetime) -> Optional[Dict]:
         """
-        Check for entry signal (simplified version).
+        Check for entry signal using REAL strategy logic and historical data.
         
-        In production, this would use the full strategy logic.
+        Loads market_state, order_flow data from database and uses shared strategy.
+        
+        Args:
+            symbol: Symbol name
+            symbol_id: Symbol ID
+            current_time: Current bar time
+            
+        Returns:
+            Signal dict if entry conditions met, None otherwise
         """
-        # Calculate ATR
-        atr = self.atr_calculator.calculate(candles)
-        
-        if atr == 0:
+        try:
+            # Get current price
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT close FROM candles 
+                    WHERE symbol_id = %s AND time <= %s
+                    ORDER BY time DESC 
+                    LIMIT 1
+                """, (symbol_id, current_time))
+                
+                row = cur.fetchone()
+                if not row:
+                    return None
+                
+                current_price = float(row[0])
+                
+                # Get market state at this time
+                cur.execute("""
+                    SELECT state, confidence 
+                    FROM market_state 
+                    WHERE symbol_id = %s AND time <= %s
+                    ORDER BY time DESC 
+                    LIMIT 1
+                """, (symbol_id, current_time))
+                
+                state_row = cur.fetchone()
+                if not state_row:
+                    return None
+                
+                market_state = state_row[0]
+                confidence = int(state_row[1])
+                
+                # Get order flow at this time
+                cur.execute("""
+                    SELECT cumulative_delta, buy_pressure, sell_pressure
+                    FROM order_flow 
+                    WHERE symbol_id = %s AND bucket <= %s
+                    ORDER BY bucket DESC 
+                    LIMIT 5
+                """, (symbol_id, current_time))
+                
+                flow_rows = cur.fetchall()
+                if not flow_rows:
+                    return None
+                
+                # Extract flow metrics
+                current_flow = flow_rows[0]
+                buy_pressure = float(current_flow[1])
+                sell_pressure = float(current_flow[2])
+                
+                # CVD momentum
+                if len(flow_rows) >= 2:
+                    cvd_start = int(flow_rows[-1][0])
+                    cvd_end = int(flow_rows[0][0])
+                    cvd_momentum = cvd_end - cvd_start
+                else:
+                    cvd_momentum = 0
+                
+                # Calculate ATR (simple 14-period)
+                cur.execute("""
+                    SELECT high, low, close
+                    FROM candles 
+                    WHERE symbol_id = %s AND time <= %s
+                    ORDER BY time DESC 
+                    LIMIT 14
+                """, (symbol_id, current_time))
+                
+                atr_rows = cur.fetchall()
+                if len(atr_rows) < 14:
+                    return None
+                
+                # Calculate ATR
+                tr_values = []
+                for i in range(len(atr_rows) - 1):
+                    high = float(atr_rows[i][0])
+                    low = float(atr_rows[i][1])
+                    prev_close = float(atr_rows[i+1][2])
+                    
+                    hl = high - low
+                    hc = abs(high - prev_close)
+                    lc = abs(low - prev_close)
+                    tr_values.append(max(hl, hc, lc))
+                
+                atr = sum(tr_values) / len(tr_values) if tr_values else 0
+                
+                if atr == 0:
+                    return None
+                
+                # Use shared strategy to evaluate entry signal
+                signal = self.strategy.evaluate_entry_signal(
+                    market_state=market_state,
+                    confidence=confidence,
+                    buy_pressure=buy_pressure,
+                    sell_pressure=sell_pressure,
+                    cvd_momentum=cvd_momentum,
+                    current_price=current_price,
+                    atr=atr,
+                    symbol=symbol
+                )
+                
+                return signal
+                
+        except Exception as e:
+            logger.error(f"Error checking entry signal for {symbol}: {e}")
             return None
-        
-        # Simplified signal logic
-        # TODO: Implement full market state + aggressive flow logic
-        
-        return {
-            'reason': 'Test Signal',
-            'atr': atr,
-            'market_state': 'IMBALANCE_UP',
-            'aggressive_flow_score': 70,
-            'volume_ratio': 1.5,
-            'cvd_momentum': 1000
-        }
     
     def save_results(self):
         """Save backtest results to database."""
