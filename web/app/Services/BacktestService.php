@@ -77,10 +77,11 @@ class BacktestService
                 'started_at' => now(),
             ]);
 
-            // Run backtest in background (don't wait for completion)
-            Process::path(base_path('..'))->start($command);
+            // Run backtest in background using shell background execution
+            $backgroundCommand = $command . ' > /dev/null 2>&1 &';
+            exec($backgroundCommand);
 
-            Log::info("Backtest started in background", ['run_id' => $run->id]);
+            Log::info("Backtest started in background", ['run_id' => $run->id, 'command' => $command]);
 
             return $run;
         } catch (\Exception $e) {
