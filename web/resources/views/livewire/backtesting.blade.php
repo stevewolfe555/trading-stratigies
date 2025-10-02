@@ -217,6 +217,96 @@
                         </span>
                     </label>
                 </div>
+                
+                <!-- Expert Mode (Collapsible) -->
+                <div class="mt-4 border-t pt-4">
+                    <button 
+                        type="button"
+                        wire:click="$toggle('showExpertMode')"
+                        class="flex items-center text-sm font-semibold text-gray-700 hover:text-gray-900"
+                    >
+                        <svg class="w-4 h-4 mr-2 transform transition-transform {{ $showExpertMode ? 'rotate-90' : '' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                        Expert Mode - Market State Detection
+                    </button>
+                    
+                    @if($showExpertMode)
+                    <div class="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <p class="text-xs text-yellow-800 mb-3">⚠️ Advanced settings - Only adjust if you understand market state detection</p>
+                        
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">
+                                    POC Distance Threshold (%)
+                                    <span class="text-gray-500">- Balance if within</span>
+                                </label>
+                                <input
+                                    type="number"
+                                    wire:model="pocDistanceThreshold"
+                                    step="0.1"
+                                    min="0.5"
+                                    max="5"
+                                    class="w-full border-gray-300 rounded-md text-sm"
+                                >
+                            </div>
+                            
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">
+                                    Momentum Threshold (%)
+                                    <span class="text-gray-500">- 60-min move</span>
+                                </label>
+                                <input
+                                    type="number"
+                                    wire:model="momentumThreshold"
+                                    step="0.1"
+                                    min="0.5"
+                                    max="10"
+                                    class="w-full border-gray-300 rounded-md text-sm"
+                                >
+                            </div>
+                            
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">
+                                    CVD Pressure Threshold (%)
+                                    <span class="text-gray-500">- Order flow imbalance</span>
+                                </label>
+                                <input
+                                    type="number"
+                                    wire:model="cvdPressureThreshold"
+                                    step="1"
+                                    min="5"
+                                    max="50"
+                                    class="w-full border-gray-300 rounded-md text-sm"
+                                >
+                            </div>
+                            
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">
+                                    Lookback Period (minutes)
+                                    <span class="text-gray-500">- Analysis window</span>
+                                </label>
+                                <input
+                                    type="number"
+                                    wire:model="lookbackPeriod"
+                                    step="5"
+                                    min="15"
+                                    max="240"
+                                    class="w-full border-gray-300 rounded-md text-sm"
+                                >
+                            </div>
+                        </div>
+                        
+                        <button 
+                            type="button"
+                            wire:click="resetExpertDefaults"
+                            class="mt-3 text-xs text-blue-600 hover:text-blue-800"
+                        >
+                            Reset to Defaults
+                        </button>
+                    </div>
+                    @endif
+                </div>
             </div>
             @endif
 

@@ -31,6 +31,13 @@ class Backtesting extends Component
     public $maxDailyLoss = 3.0;
     public $allowBalanceTrades = false;
     
+    // Expert mode parameters
+    public $showExpertMode = false;
+    public $pocDistanceThreshold = 1.5;
+    public $momentumThreshold = 1.5;
+    public $cvdPressureThreshold = 15;
+    public $lookbackPeriod = 60;
+    
     // State
     public bool $showRunForm = false;
     public ?int $selectedRunId = null;
@@ -48,8 +55,21 @@ class Backtesting extends Component
             'atrTargetMultiplier' => 'float',
             'maxDailyLoss' => 'float',
             'allowBalanceTrades' => 'boolean',
+            'showExpertMode' => 'boolean',
+            'pocDistanceThreshold' => 'float',
+            'momentumThreshold' => 'float',
+            'cvdPressureThreshold' => 'integer',
+            'lookbackPeriod' => 'integer',
             'unlimitedMode' => 'boolean',
         ];
+    }
+    
+    public function resetExpertDefaults(): void
+    {
+        $this->pocDistanceThreshold = 1.5;
+        $this->momentumThreshold = 1.5;
+        $this->cvdPressureThreshold = 15;
+        $this->lookbackPeriod = 60;
     }
     
     public function boot(BacktestService $backtestService): void
@@ -131,6 +151,11 @@ class Backtesting extends Component
                 'atr_target_multiplier' => $this->atrTargetMultiplier,
                 'max_daily_loss_pct' => $this->maxDailyLoss,
                 'allow_balance_trades' => $this->allowBalanceTrades,
+                // Expert mode parameters
+                'poc_distance_threshold' => $this->pocDistanceThreshold,
+                'momentum_threshold' => $this->momentumThreshold,
+                'cvd_pressure_threshold' => $this->cvdPressureThreshold,
+                'lookback_period' => $this->lookbackPeriod,
             ]);
         }
 
