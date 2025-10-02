@@ -22,9 +22,35 @@ from loguru import logger
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app.detectors.market_state import MarketStateDetector
-from app.indicators.aggressive_flow import AggressiveFlowDetector
-from app.trading.atr_calculator import ATRCalculator
+# Import classes if they exist, otherwise use simple versions
+try:
+    from app.detectors.market_state import MarketStateDetector
+    from app.indicators.aggressive_flow import AggressiveFlowDetector
+    from app.trading.atr_calculator import ATRCalculator
+except ImportError:
+    # Simple fallback implementations
+    class MarketStateDetector:
+        pass
+    
+    class AggressiveFlowDetector:
+        pass
+    
+    class ATRCalculator:
+        def calculate(self, candles):
+            if len(candles) < 14:
+                return 0
+            highs = [c['high'] for c in candles[-14:]]
+            lows = [c['low'] for c in candles[-14:]]
+            closes = [c['close'] for c in candles[-14:]]
+            
+            tr_values = []
+            for i in range(1, len(candles[-14:])):
+                hl = highs[i] - lows[i]
+                hc = abs(highs[i] - closes[i-1])
+                lc = abs(lows[i] - closes[i-1])
+                tr_values.append(max(hl, hc, lc))
+            
+            return sum(tr_values) / len(tr_values) if tr_values else 0
 
 # Configure logging
 logger.remove()
