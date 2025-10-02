@@ -79,7 +79,7 @@ class AccountService
     /**
      * Load open positions from Alpaca
      */
-    public function loadPositions(): array
+    public function loadPositions(?string $symbol = null): array
     {
         $apiKey = env('ALPACA_API_KEY');
         $secretKey = env('ALPACA_SECRET_KEY');
@@ -107,9 +107,9 @@ class AccountService
     /**
      * Load trade history from database
      */
-    public function loadTradeHistory(int $limit = 20): array
+    public function loadTradeHistory(?string $symbol = null, int $limit = 20): array
     {
-        $trades = DB::select("
+        $query = "
             SELECT s.time AT TIME ZONE 'America/New_York' as time_et, 
                    s.type, 
                    s.details,
@@ -117,9 +117,19 @@ class AccountService
             FROM signals s
             JOIN symbols sym ON s.symbol_id = sym.id
             WHERE s.type IN ('BUY', 'SELL')
-            ORDER BY s.time DESC
-            LIMIT ?
-        ", [$limit]);
+        ";
+        
+        $params = [];
+        
+        if ($symbol) {
+            $query .= " AND sym.symbol = ?";
+            $params[] = $symbol;
+        }
+        
+        $query .= " ORDER BY s.time DESC LIMIT ?";
+        $params[] = $limit;
+        
+        $trades = DB::select($query, $params);
 
         return array_map(function($trade) {
             $details = json_decode($trade->details, true);

@@ -84,10 +84,10 @@ class StockDetail extends Component
         $this->aggressiveFlow = $this->metrics->loadAggressiveFlow($this->symbol);
         $this->sessionInfo = $this->metrics->getSessionInfo();
 
-        // Load account data
+        // Load account data (filtered by current symbol)
         $this->accountInfo = $this->account->loadAccountInfo();
-        $this->positions = $this->account->loadPositions();
-        $this->tradeHistory = $this->account->loadTradeHistory();
+        $this->positions = $this->account->loadPositions($this->symbol);
+        $this->tradeHistory = $this->account->loadTradeHistory($this->symbol);
     }
 
     public function render()
