@@ -250,6 +250,8 @@ class BacktestEngine:
 
     def _save_constraint_analysis(self, run_id: int):
         """Save constraint analysis data to database."""
+        from .versions import get_version_info
+        
         total_signals = sum(self.portfolio.signals_generated.values())
         total_blocked = sum(self.portfolio.signals_blocked.values())
 
@@ -264,11 +266,21 @@ class BacktestEngine:
             recommendations['max_positions_needed'] = max_positions_needed
             recommendations['capital_needed'] = self.portfolio.initial_capital * (max_positions_needed / max(1, len(self.portfolio.positions)))
 
+        # Get version info
+        version = get_version_info()
+        
         constraint_data = {
             'signals_generated': total_signals,
             'signals_blocked': total_blocked,
             'blocked_percentage': blocked_percentage,
-            'recommendations': recommendations
+            'recommendations': recommendations,
+            'version_info': {
+                'engine_version': version.engine_version,
+                'strategy_version': version.strategy_version,
+                'config_version': version.config_version,
+                'timestamp': version.timestamp,
+                'description': version.description
+            }
         }
 
         with self.config.get_connection().cursor() as cur:

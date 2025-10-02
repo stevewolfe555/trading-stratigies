@@ -59,17 +59,36 @@ class BacktestService
         Log::info("Running backtest: {$command}");
 
         try {
-            // Run backtest in background
-            $result = Process::path(base_path('..'))->run($command);
+            // Create a pending run record first
+            $run = BacktestRun::create([
+                'name' => 'Backtest ' . now()->format('Y-m-d H:i:s'),
+                'strategy_name' => 'auction_market',
+                'start_date' => now()->subDays($years * 365),
+                'end_date' => now(),
+                'symbols' => $symbols ? explode(',', $symbols) : [],
+                'parameters' => $params,
+                'status' => 'running',
+                'started_at' => now(),
+            ]);
+
+            // Run backtest in background with timeout
+            $result = Process::path(base_path('..'))->timeout(300)->run($command);
 
             if ($result->successful()) {
-                // Get the latest backtest run
-                $run = BacktestRun::latest('id')->first();
+                // Refresh the run to get updated data
+                $run->refresh();
 
-                Log::info("Backtest completed successfully", ['run_id' => $run?->id]);
+                Log::info("Backtest completed successfully", ['run_id' => $run->id]);
 
                 return $run;
             } else {
+                // Update run status to failed
+                $run->update([
+                    'status' => 'failed',
+                    'error_message' => $result->errorOutput(),
+                    'completed_at' => now(),
+                ]);
+
                 Log::error("Backtest failed", [
                     'output' => $result->output(),
                     'error' => $result->errorOutput()
@@ -79,6 +98,15 @@ class BacktestService
             }
         } catch (\Exception $e) {
             Log::error("Backtest exception", ['error' => $e->getMessage()]);
+            
+            if (isset($run)) {
+                $run->update([
+                    'status' => 'failed',
+                    'error_message' => $e->getMessage(),
+                    'completed_at' => now(),
+                ]);
+            }
+            
             return null;
         }
     }
