@@ -248,6 +248,20 @@ class BacktestPortfolio:
 
         total_pnl = sum(t['pnl'] for t in self.trades)
         total_pnl_pct = (total_pnl / self.initial_capital) * 100
+        
+        # Calculate Sharpe Ratio
+        sharpe_ratio = 0
+        if len(self.trades) > 1:
+            returns = [t['pnl_pct'] for t in self.trades]
+            avg_return = sum(returns) / len(returns)
+            
+            # Calculate standard deviation
+            variance = sum((r - avg_return) ** 2 for r in returns) / len(returns)
+            std_dev = variance ** 0.5
+            
+            # Sharpe Ratio (assuming 0% risk-free rate, annualized)
+            if std_dev > 0:
+                sharpe_ratio = (avg_return / std_dev) * (252 ** 0.5)  # Annualized (252 trading days)
 
         return {
             'total_trades': len(self.trades),
@@ -259,5 +273,6 @@ class BacktestPortfolio:
             'avg_win': sum(t['pnl'] for t in winning_trades) / len(winning_trades) if winning_trades else 0,
             'avg_loss': sum(t['pnl'] for t in losing_trades) / len(losing_trades) if losing_trades else 0,
             'largest_win': max((t['pnl'] for t in winning_trades), default=0),
-            'largest_loss': min((t['pnl'] for t in losing_trades), default=0)
+            'largest_loss': min((t['pnl'] for t in losing_trades), default=0),
+            'sharpe_ratio': sharpe_ratio
         }

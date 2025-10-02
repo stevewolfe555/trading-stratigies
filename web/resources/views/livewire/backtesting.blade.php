@@ -387,6 +387,48 @@
                     </div>
                 </div>
 
+                <!-- Configuration -->
+                @if($selectedRun->parameters)
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <h3 class="text-sm font-semibold text-gray-700 mb-3">⚙️ Configuration</h3>
+                    
+                    <div class="grid grid-cols-2 gap-3 text-xs">
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">Initial Capital:</span>
+                            <span class="font-semibold">${{ number_format($selectedRun->parameters['initial_capital'] ?? 100000) }}</span>
+                        </div>
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">Max Positions:</span>
+                            <span class="font-semibold">{{ $selectedRun->parameters['max_positions'] ?? 3 }}</span>
+                        </div>
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">Risk Per Trade:</span>
+                            <span class="font-semibold">{{ $selectedRun->parameters['risk_per_trade_pct'] ?? 1 }}%</span>
+                        </div>
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">Test Mode:</span>
+                            <span class="font-semibold capitalize">{{ $selectedRun->parameters['test_mode'] ?? 'portfolio' }}</span>
+                        </div>
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">Min Aggression:</span>
+                            <span class="font-semibold">{{ $selectedRun->parameters['min_aggression_score'] ?? 70 }}</span>
+                        </div>
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">ATR Stop:</span>
+                            <span class="font-semibold">{{ $selectedRun->parameters['atr_stop_multiplier'] ?? 1.5 }}x</span>
+                        </div>
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">ATR Target:</span>
+                            <span class="font-semibold">{{ $selectedRun->parameters['atr_target_multiplier'] ?? 3 }}x</span>
+                        </div>
+                        <div class="flex justify-between p-2 bg-gray-50 rounded">
+                            <span class="text-gray-600">Symbols:</span>
+                            <span class="font-semibold">{{ count($selectedRun->symbols ?? []) }}</span>
+                        </div>
+                    </div>
+                </div>
+                @endif
+
                 <!-- Equity Curve Chart -->
                 <div class="bg-white p-4 rounded-lg shadow">
                     <h3 class="text-sm font-semibold text-gray-700 mb-3">Equity Curve</h3>

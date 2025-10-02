@@ -42,6 +42,7 @@ class BacktestAnalyzer:
                         avg_loss = %s,
                         largest_win = %s,
                         largest_loss = %s,
+                        sharpe_ratio = %s,
                         status = %s,
                         completed_at = %s
                     WHERE id = %s
@@ -56,6 +57,7 @@ class BacktestAnalyzer:
                     stats['avg_loss'],
                     stats['largest_win'],
                     stats['largest_loss'],
+                    stats['sharpe_ratio'],
                     'completed',
                     datetime.now(),
                     run_id
