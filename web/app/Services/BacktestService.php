@@ -77,31 +77,12 @@ class BacktestService
                 'started_at' => now(),
             ]);
 
-            // Run backtest in background with timeout
-            $result = Process::path(base_path('..'))->timeout(300)->run($command);
+            // Run backtest in background (don't wait for completion)
+            Process::path(base_path('..'))->start($command);
 
-            if ($result->successful()) {
-                // Refresh the run to get updated data
-                $run->refresh();
+            Log::info("Backtest started in background", ['run_id' => $run->id]);
 
-                Log::info("Backtest completed successfully", ['run_id' => $run->id]);
-
-                return $run;
-            } else {
-                // Update run status to failed
-                $run->update([
-                    'status' => 'failed',
-                    'error_message' => $result->errorOutput(),
-                    'completed_at' => now(),
-                ]);
-
-                Log::error("Backtest failed", [
-                    'output' => $result->output(),
-                    'error' => $result->errorOutput()
-                ]);
-
-                return null;
-            }
+            return $run;
         } catch (\Exception $e) {
             Log::error("Backtest exception", ['error' => $e->getMessage()]);
             
