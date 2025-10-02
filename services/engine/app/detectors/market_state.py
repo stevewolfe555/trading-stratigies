@@ -244,13 +244,13 @@ class MarketStateDetector:
         """
         confidence = 0
         
-        # Rule 1: Distance from POC
-        if distance_from_poc < 0.5:
-            # Very close to POC = likely balance
+        # Rule 1: Distance from POC (adjusted for realistic price movement)
+        if distance_from_poc < 1.5:
+            # Close to POC = likely balance
             state = 'BALANCE'
             confidence += 40
-        elif distance_from_poc < 1.0:
-            # Somewhat close = possible balance
+        elif distance_from_poc < 2.5:
+            # Moderate distance = transitioning
             confidence += 20
         else:
             # Far from POC = likely imbalance
@@ -259,7 +259,7 @@ class MarketStateDetector:
         # Rule 2: Value Area position
         if in_value_area:
             # Inside value area = balance
-            if distance_from_poc < 1.0:
+            if distance_from_poc < 2.0:
                 state = 'BALANCE'
                 confidence += 30
         else:
@@ -271,22 +271,22 @@ class MarketStateDetector:
                 state = 'IMBALANCE_DOWN'
                 confidence += 30
         
-        # Rule 3: Momentum
-        if abs(momentum) > 50:
-            # Strong momentum = imbalance
+        # Rule 3: Momentum (realistic thresholds for 60-min moves)
+        if abs(momentum) > 1.5:
+            # Strong momentum (>1.5% move in 60 min) = imbalance
             if momentum > 0:
                 state = 'IMBALANCE_UP'
             else:
                 state = 'IMBALANCE_DOWN'
             confidence += 20
-        elif abs(momentum) < 20:
-            # Weak momentum = balance
+        elif abs(momentum) < 0.5:
+            # Weak momentum (<0.5% move) = balance
             state = 'BALANCE'
             confidence += 10
         
-        # Rule 4: CVD Pressure
-        if abs(cvd_pressure) > 30:
-            # Strong CVD = imbalance
+        # Rule 4: CVD Pressure (adjusted for realistic order flow)
+        if abs(cvd_pressure) > 15:
+            # Strong CVD (>15% imbalance) = directional bias
             if cvd_pressure > 0:
                 state = 'IMBALANCE_UP'
             else:
