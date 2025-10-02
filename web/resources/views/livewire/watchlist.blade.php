@@ -153,15 +153,32 @@
                 @if($position['status'] === 'FILLED')
                     <!-- Open Position with P&L -->
                     <div class="space-y-1">
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-600">Entry:</span>
-                            <span class="font-semibold">${{ number_format($position['entry_price'], 2) }}</span>
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Entry:</span>
+                                <span class="font-semibold">${{ number_format($position['entry_price'], 2) }}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Current:</span>
+                                <span class="font-semibold">${{ number_format($position['current_price'], 2) }}</span>
+                            </div>
+                            
+                            @if(isset($position['take_profit']) && $position['take_profit'])
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">🎯 Target:</span>
+                                <span class="font-semibold text-green-600">${{ number_format($position['take_profit'], 2) }}</span>
+                            </div>
+                            @endif
+                            
+                            @if(isset($position['stop_loss']) && $position['stop_loss'])
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">🛑 Stop:</span>
+                                <span class="font-semibold text-red-600">${{ number_format($position['stop_loss'], 2) }}</span>
+                            </div>
+                            @endif
                         </div>
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-600">Current:</span>
-                            <span class="font-semibold">${{ number_format($position['current_price'], 2) }}</span>
-                        </div>
-                        <div class="flex justify-between text-sm">
+                        
+                        <div class="flex justify-between text-sm pt-1">
                             <span class="text-gray-600">Qty:</span>
                             <span class="font-semibold">{{ $position['qty'] }} shares</span>
                         </div>

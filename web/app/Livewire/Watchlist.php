@@ -159,12 +159,39 @@ class Watchlist extends Component
                 ])->get('https://paper-api.alpaca.markets/v2/positions');
                 
                 if ($positionsResponse->successful()) {
-                    $positions = collect($positionsResponse->json())->map(function($pos) {
+                    $positions = collect($positionsResponse->json())->map(function($pos) use ($apiKey, $secretKey) {
                         $entryPrice = (float)$pos['avg_entry_price'];
                         $currentPrice = (float)$pos['current_price'];
                         $qty = (int)$pos['qty'];
                         $unrealizedPl = (float)$pos['unrealized_pl'];
                         $unrealizedPlPct = (float)$pos['unrealized_plpc'] * 100;
+                        
+                        // Get open orders for this symbol to find TP/SL
+                        $takeProfit = null;
+                        $stopLoss = null;
+                        
+                        try {
+                            $ordersResponse = \Illuminate\Support\Facades\Http::withHeaders([
+                                'APCA-API-KEY-ID' => $apiKey,
+                                'APCA-API-SECRET-KEY' => $secretKey,
+                            ])->get('https://paper-api.alpaca.markets/v2/orders', [
+                                'status' => 'open',
+                                'symbols' => $pos['symbol']
+                            ]);
+                            
+                            if ($ordersResponse->successful()) {
+                                $orders = $ordersResponse->json();
+                                foreach ($orders as $order) {
+                                    if ($order['type'] === 'limit' && isset($order['limit_price'])) {
+                                        $takeProfit = (float)$order['limit_price'];
+                                    } elseif ($order['type'] === 'stop' && isset($order['stop_price'])) {
+                                        $stopLoss = (float)$order['stop_price'];
+                                    }
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            // Silently fail
+                        }
                         
                         return [
                             'symbol' => $pos['symbol'],
@@ -175,6 +202,8 @@ class Watchlist extends Component
                             'unrealized_pl' => $unrealizedPl,
                             'unrealized_pl_pct' => $unrealizedPlPct,
                             'market_value' => (float)$pos['market_value'],
+                            'take_profit' => $takeProfit,
+                            'stop_loss' => $stopLoss,
                             'status' => 'FILLED',
                         ];
                     })->toArray();
