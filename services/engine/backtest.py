@@ -62,6 +62,8 @@ def parse_arguments():
     parser.add_argument('--min-aggression', type=int, default=70, help='Minimum aggression score (0-100)')
     parser.add_argument('--atr-stop', type=float, default=1.5, help='ATR stop loss multiplier')
     parser.add_argument('--atr-target', type=float, default=3.0, help='ATR take profit multiplier')
+    parser.add_argument('--max-daily-loss', type=float, default=3.0, help='Maximum daily loss percentage')
+    parser.add_argument('--allow-balance-trades', action='store_true', help='Allow trades during BALANCE state (high aggression only)')
     
     # Output
     parser.add_argument('--export', type=str, help='Export results to JSON file')
@@ -210,6 +212,8 @@ def main():
         'min_aggression_score': args.min_aggression,
         'atr_stop_multiplier': args.atr_stop,
         'atr_target_multiplier': args.atr_target,
+        'max_daily_loss_pct': args.max_daily_loss,
+        'allow_balance_trades': args.allow_balance_trades,
         'test_mode': 'unlimited' if args.unlimited else 'portfolio',
         'enable_position_limits': not args.unlimited,
         'enable_cash_limits': not args.unlimited,

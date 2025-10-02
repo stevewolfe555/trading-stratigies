@@ -188,6 +188,34 @@
                         >
                         @error('atrTargetMultiplier') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
                     </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Max Daily Loss %</label>
+                        <input
+                            type="number"
+                            wire:model="maxDailyLoss"
+                            step="0.5"
+                            min="1"
+                            max="10"
+                            class="w-full border-gray-300 rounded-md text-sm"
+                        >
+                        @error('maxDailyLoss') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
+                    </div>
+                </div>
+                
+                <!-- Allow Balance Trades -->
+                <div class="mt-4">
+                    <label class="flex items-center">
+                        <input
+                            type="checkbox"
+                            wire:model="allowBalanceTrades"
+                            class="rounded border-gray-300 text-green-600 focus:ring-green-500"
+                        >
+                        <span class="ml-2 text-sm text-gray-700">
+                            Allow BALANCE trades (when aggression > 80)
+                            <span class="text-xs text-gray-500 ml-1">- Increases trade frequency</span>
+                        </span>
+                    </label>
                 </div>
             </div>
             @endif

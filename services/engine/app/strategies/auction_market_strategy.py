@@ -49,6 +49,7 @@ class AuctionMarketStrategy:
         self.atr_target_multiplier = self.params.get('atr_target_multiplier', 3.0)
         self.risk_per_trade_pct = self.params.get('risk_per_trade_pct', 1.0)
         self.max_positions = self.params.get('max_positions', 3)
+        self.allow_balance_trades = self.params.get('allow_balance_trades', False)
     
     def calculate_aggression_score(self, 
                                    buy_pressure: float, 
@@ -181,19 +182,25 @@ class AuctionMarketStrategy:
         
         # ENTRY CONDITIONS
         
-        # 1. Market must be in IMBALANCE
+        # 1. Market must be in IMBALANCE (or BALANCE if allowed with high aggression)
         if market_state not in ['IMBALANCE_UP', 'IMBALANCE_DOWN']:
-            return None
+            # Allow BALANCE trades only if enabled and aggression is very high
+            if not (self.allow_balance_trades and market_state == 'BALANCE' and aggression_score >= 80):
+                return None
         
         # 2. Aggression score must be high enough
         if aggression_score < self.min_aggression_score:
             return None
         
-        # 3. Flow direction must match market state
+        # 3. Flow direction must match market state (or be strong for BALANCE)
         if market_state == 'IMBALANCE_UP' and flow_direction != 'BUY':
             return None
         
         if market_state == 'IMBALANCE_DOWN' and flow_direction != 'SELL':
+            return None
+        
+        # For BALANCE trades, require strong directional flow
+        if market_state == 'BALANCE' and flow_direction == 'NEUTRAL':
             return None
         
         # 4. Must have valid ATR
@@ -201,7 +208,16 @@ class AuctionMarketStrategy:
             return None
         
         # CONDITIONS MET - Generate signal
-        side = 'buy' if market_state == 'IMBALANCE_UP' else 'sell'
+        # Determine side based on market state or flow direction (for BALANCE)
+        if market_state == 'IMBALANCE_UP':
+            side = 'buy'
+        elif market_state == 'IMBALANCE_DOWN':
+            side = 'sell'
+        elif market_state == 'BALANCE':
+            # Use flow direction for BALANCE trades
+            side = 'buy' if flow_direction == 'BUY' else 'sell'
+        else:
+            return None  # Should never reach here
         
         # Calculate stop loss and take profit using ATR
         if side == 'buy':

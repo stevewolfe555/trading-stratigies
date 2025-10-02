@@ -25,6 +25,8 @@ class BacktestService
         $minAggression = $params['min_aggression_score'] ?? 70;
         $atrStop = $params['atr_stop_multiplier'] ?? 1.5;
         $atrTarget = $params['atr_target_multiplier'] ?? 3.0;
+        $maxDailyLoss = $params['max_daily_loss_pct'] ?? 3.0;
+        $allowBalanceTrades = $params['allow_balance_trades'] ?? false;
 
         // Test modes
         $testMode = $params['test_mode'] ?? 'portfolio'; // 'portfolio', 'individual', 'unlimited'
@@ -32,9 +34,11 @@ class BacktestService
         $unlimitedMode = $params['unlimited_mode'] ?? false;
 
         // Build command based on test mode
+        $balanceFlag = $allowBalanceTrades ? ' --allow-balance-trades' : '';
+        
         if ($testMode === 'individual' && $individualSymbol) {
             $command = sprintf(
-                'docker compose exec -T engine python3 backtest.py --individual %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s --min-aggression %s --atr-stop %s --atr-target %s',
+                'docker compose exec -T engine python3 backtest.py --individual %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s --min-aggression %s --atr-stop %s --atr-target %s --max-daily-loss %s%s',
                 escapeshellarg($individualSymbol),
                 escapeshellarg($years),
                 escapeshellarg($initialCapital),
@@ -42,11 +46,13 @@ class BacktestService
                 escapeshellarg($maxPositions),
                 escapeshellarg($minAggression),
                 escapeshellarg($atrStop),
-                escapeshellarg($atrTarget)
+                escapeshellarg($atrTarget),
+                escapeshellarg($maxDailyLoss),
+                $balanceFlag
             );
         } elseif ($unlimitedMode || $testMode === 'unlimited') {
             $command = sprintf(
-                'docker compose exec -T engine python3 backtest.py --symbols %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s --min-aggression %s --atr-stop %s --atr-target %s --unlimited',
+                'docker compose exec -T engine python3 backtest.py --symbols %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s --min-aggression %s --atr-stop %s --atr-target %s --max-daily-loss %s%s --unlimited',
                 escapeshellarg($symbols),
                 escapeshellarg($years),
                 escapeshellarg($initialCapital),
@@ -54,12 +60,14 @@ class BacktestService
                 escapeshellarg($maxPositions),
                 escapeshellarg($minAggression),
                 escapeshellarg($atrStop),
-                escapeshellarg($atrTarget)
+                escapeshellarg($atrTarget),
+                escapeshellarg($maxDailyLoss),
+                $balanceFlag
             );
         } else {
             // Portfolio mode (default)
             $command = sprintf(
-                'docker compose exec -T engine python3 backtest.py --symbols %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s --min-aggression %s --atr-stop %s --atr-target %s',
+                'docker compose exec -T engine python3 backtest.py --symbols %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s --min-aggression %s --atr-stop %s --atr-target %s --max-daily-loss %s%s',
                 escapeshellarg($symbols),
                 escapeshellarg($years),
                 escapeshellarg($initialCapital),
@@ -67,7 +75,9 @@ class BacktestService
                 escapeshellarg($maxPositions),
                 escapeshellarg($minAggression),
                 escapeshellarg($atrStop),
-                escapeshellarg($atrTarget)
+                escapeshellarg($atrTarget),
+                escapeshellarg($maxDailyLoss),
+                $balanceFlag
             );
         }
 

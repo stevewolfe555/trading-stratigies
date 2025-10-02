@@ -28,6 +28,8 @@ class Backtesting extends Component
     public $minAggressionScore = 70;
     public $atrStopMultiplier = 1.5;
     public $atrTargetMultiplier = 3.0;
+    public $maxDailyLoss = 3.0;
+    public $allowBalanceTrades = false;
     
     // State
     public bool $showRunForm = false;
@@ -44,6 +46,8 @@ class Backtesting extends Component
             'minAggressionScore' => 'integer',
             'atrStopMultiplier' => 'float',
             'atrTargetMultiplier' => 'float',
+            'maxDailyLoss' => 'float',
+            'allowBalanceTrades' => 'boolean',
             'unlimitedMode' => 'boolean',
         ];
     }
@@ -93,6 +97,7 @@ class Backtesting extends Component
             $rules['minAggressionScore'] = 'required|integer|min:1|max:100';
             $rules['atrStopMultiplier'] = 'required|numeric|min:0.5|max:5';
             $rules['atrTargetMultiplier'] = 'required|numeric|min:1|max:10';
+            $rules['maxDailyLoss'] = 'required|numeric|min:1|max:10';
         }
 
         $this->validate($rules);
@@ -105,6 +110,7 @@ class Backtesting extends Component
         $this->minAggressionScore = (int) $this->minAggressionScore;
         $this->atrStopMultiplier = (float) $this->atrStopMultiplier;
         $this->atrTargetMultiplier = (float) $this->atrTargetMultiplier;
+        $this->maxDailyLoss = (float) $this->maxDailyLoss;
 
         // Build parameters array
         $params = [
@@ -123,6 +129,8 @@ class Backtesting extends Component
                 'min_aggression_score' => $this->minAggressionScore,
                 'atr_stop_multiplier' => $this->atrStopMultiplier,
                 'atr_target_multiplier' => $this->atrTargetMultiplier,
+                'max_daily_loss_pct' => $this->maxDailyLoss,
+                'allow_balance_trades' => $this->allowBalanceTrades,
             ]);
         }
 
