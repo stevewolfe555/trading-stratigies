@@ -218,13 +218,30 @@ class Watchlist extends Component
                 ]);
                 
                 if ($ordersResponse->successful()) {
-                    $pendingOrders = collect($ordersResponse->json())->map(function($order) {
+                    $pendingOrders = collect($ordersResponse->json())->map(function($order) use ($apiKey, $secretKey) {
+                        // Try to get current price from latest trade
+                        $currentPrice = null;
+                        try {
+                            $quoteResponse = \Illuminate\Support\Facades\Http::withHeaders([
+                                'APCA-API-KEY-ID' => $apiKey,
+                                'APCA-API-SECRET-KEY' => $secretKey,
+                            ])->get("https://data.alpaca.markets/v2/stocks/{$order['symbol']}/quotes/latest");
+                            
+                            if ($quoteResponse->successful()) {
+                                $quote = $quoteResponse->json();
+                                $currentPrice = isset($quote['quote']['ap']) ? (float)$quote['quote']['ap'] : null;
+                            }
+                        } catch (\Exception $e) {
+                            // Silently fail
+                        }
+                        
                         return [
                             'symbol' => $order['symbol'],
                             'side' => $order['side'],
                             'qty' => (int)$order['qty'],
                             'order_type' => $order['type'],
                             'limit_price' => isset($order['limit_price']) ? (float)$order['limit_price'] : null,
+                            'current_price' => $currentPrice,
                             'submitted_at' => $order['submitted_at'],
                             'status' => 'PENDING',
                         ];

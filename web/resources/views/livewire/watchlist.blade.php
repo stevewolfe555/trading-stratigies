@@ -201,21 +201,42 @@
                 @else
                     <!-- Pending Order -->
                     <div class="space-y-1">
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-600">Type:</span>
-                            <span class="font-semibold uppercase">{{ $position['order_type'] }}</span>
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Type:</span>
+                                <span class="font-semibold uppercase">{{ $position['order_type'] }}</span>
+                            </div>
+                            @if(isset($position['current_price']) && $position['current_price'])
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Current:</span>
+                                <span class="font-semibold">${{ number_format($position['current_price'], 2) }}</span>
+                            </div>
+                            @endif
+                            
+                            @if($position['limit_price'])
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Limit:</span>
+                                <span class="font-semibold text-blue-600">${{ number_format($position['limit_price'], 2) }}</span>
+                            </div>
+                            @endif
+                            
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Qty:</span>
+                                <span class="font-semibold">{{ $position['qty'] }} shares</span>
+                            </div>
                         </div>
-                        @if($position['limit_price'])
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-600">Limit Price:</span>
-                            <span class="font-semibold">${{ number_format($position['limit_price'], 2) }}</span>
+                        
+                        @if(isset($position['current_price']) && $position['limit_price'])
+                        @php
+                            $distance = abs($position['current_price'] - $position['limit_price']);
+                            $distancePct = ($distance / $position['current_price']) * 100;
+                        @endphp
+                        <div class="text-xs text-gray-500 mt-1">
+                            Distance: ${{ number_format($distance, 2) }} ({{ number_format($distancePct, 2) }}%)
                         </div>
                         @endif
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-600">Qty:</span>
-                            <span class="font-semibold">{{ $position['qty'] }} shares</span>
-                        </div>
-                        <div class="text-xs text-gray-500 mt-2">
+                        
+                        <div class="text-xs text-gray-500 mt-1">
                             Submitted: {{ \Carbon\Carbon::parse($position['submitted_at'])->diffForHumans() }}
                         </div>
                     </div>
