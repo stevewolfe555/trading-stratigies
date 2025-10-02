@@ -1,0 +1,607 @@
+<?php
+
+namespace App\Livewire;
+
+use Illuminate\Support\Facades\DB;
+use Livewire\Component;
+
+class StockDetail extends Component
+{
+    public string $symbol = 'AAPL';
+    public string $timeframe = '1m';
+    public array $labels = [];
+    public array $closes = [];
+    public array $symbols = [];
+    public array $marketState = [];
+    public array $lvnAlert = [];
+    public array $aggressiveFlow = [];
+    public array $sessionInfo = [];
+    public array $positions = [];
+    public array $tradeHistory = [];
+    public array $accountInfo = [];
+
+    public function mount($symbol = null): void
+    {
+        $this->symbols = DB::table('symbols')->orderBy('symbol')->pluck('symbol')->toArray();
+        if (!$this->symbols) {
+            $this->symbols = ['AAPL'];
+        }
+        
+        // Use provided symbol or default to first
+        if ($symbol && in_array($symbol, $this->symbols)) {
+            $this->symbol = $symbol;
+        } elseif (!in_array($this->symbol, $this->symbols)) {
+            $this->symbol = $this->symbols[0];
+        }
+    }
+
+    public function updatedSymbol(): void
+    {
+        $this->dispatch('symbol-changed', symbol: $this->symbol);
+    }
+
+    public function updatedTimeframe(): void
+    {
+        // Timeframe changed, reload data
+    }
+
+    protected function loadData(): void
+    {
+        // Resolve symbol_id
+        $row = DB::table('symbols')->select('id')->where('symbol', $this->symbol)->first();
+        if (!$row) {
+            $this->labels = [];
+            $this->closes = [];
+            return;
+        }
+        $symbolId = $row->id;
+
+        // Aggregate candles based on timeframe
+        $interval = $this->getTimeframeInterval();
+        $limit = $this->getTimeframeLimit();
+
+        if ($this->timeframe === '1m' || $this->timeframe === 'tick') {
+            // Raw 1-minute candles - convert to US Eastern Time for display
+            $rows = DB::select(
+                "SELECT time AT TIME ZONE 'America/New_York' as time, open, high, low, close, volume
+                 FROM candles 
+                 WHERE symbol_id = ? 
+                 ORDER BY time ASC 
+                 LIMIT ?",
+                [$symbolId, $limit]
+            );
+            // Return OHLC data for candlestick chart
+            $this->labels = array_map(fn($r) => $r->time, $rows);
+            $this->closes = array_map(fn($r) => [
+                'x' => $r->time,
+                'o' => (float)$r->open,
+                'h' => (float)$r->high,
+                'l' => (float)$r->low,
+                'c' => (float)$r->close,
+            ], $rows);
+        } else {
+            // Aggregate using time_bucket (TimescaleDB) - convert to US Eastern Time
+            $rows = DB::select(
+                "WITH bucketed AS (
+                    SELECT 
+                        time_bucket(?, time) as bucket_utc,
+                        open, high, low, close, volume, time
+                    FROM candles 
+                    WHERE symbol_id = ?
+                )
+                SELECT 
+                    bucket_utc AT TIME ZONE 'America/New_York' as bucket,
+                    first(open, time) as open,
+                    max(high) as high,
+                    min(low) as low,
+                    last(close, time) as close,
+                    sum(volume) as volume
+                FROM bucketed
+                GROUP BY bucket_utc
+                ORDER BY bucket_utc ASC 
+                LIMIT ?",
+                [$interval, $symbolId, $limit]
+            );
+            $this->labels = array_map(fn($r) => $r->bucket, $rows);
+            $this->closes = array_map(fn($r) => [
+                'x' => $r->bucket,
+                'o' => (float)$r->open,
+                'h' => (float)$r->high,
+                'l' => (float)$r->low,
+                'c' => (float)$r->close,
+            ], $rows);
+        }
+    }
+
+    protected function getTimeframeInterval(): string
+    {
+        return match($this->timeframe) {
+            '5m' => '5 minutes',
+            '15m' => '15 minutes',
+            '30m' => '30 minutes',
+            '1h' => '1 hour',
+            '1d' => '1 day',
+            default => '1 minute',
+        };
+    }
+
+    protected function getTimeframeLimit(): int
+    {
+        return match($this->timeframe) {
+            'tick', '1m' => 300,
+            '5m' => 288,  // ~1 day
+            '15m' => 96,  // ~1 day
+            '30m' => 48,  // ~1 day
+            '1h' => 168,  // ~1 week
+            '1d' => 90,   // ~3 months
+            default => 300,
+        };
+    }
+
+    protected function loadSignals(): array
+    {
+        // Fetch signals for this symbol to plot on chart
+        $row = DB::table('symbols')->select('id')->where('symbol', $this->symbol)->first();
+        if (!$row) {
+            return [];
+        }
+        $symbolId = $row->id;
+
+        // Get signals with nearest candle price using LATERAL join
+        $signals = DB::select(
+            "SELECT s.time, s.type, 
+                    (SELECT c.close 
+                     FROM candles c 
+                     WHERE c.symbol_id = s.symbol_id 
+                       AND c.time <= s.time 
+                     ORDER BY c.time DESC 
+                     LIMIT 1) as price
+             FROM signals s 
+             WHERE s.symbol_id = ? 
+             ORDER BY s.time ASC 
+             LIMIT 100",
+            [$symbolId]
+        );
+
+        // Filter out signals without valid prices
+        return array_filter(array_map(fn($s) => [
+            'time' => $s->time,
+            'type' => $s->type,
+            'price' => (float)($s->price ?? 0),
+        ], $signals), fn($s) => $s['price'] > 0);
+    }
+
+    protected function loadVolumeProfile(): array
+    {
+        // Fetch latest volume profile metrics (POC, VAH, VAL, LVNs)
+        $row = DB::table('symbols')->select('id')->where('symbol', $this->symbol)->first();
+        if (!$row) {
+            return [];
+        }
+        $symbolId = $row->id;
+
+        // Get the most recent profile metrics
+        $metrics = DB::select(
+            'SELECT bucket, poc, vah, val, lvns, hvns, total_volume
+             FROM profile_metrics
+             WHERE symbol_id = ?
+             ORDER BY bucket DESC
+             LIMIT 1',
+            [$symbolId]
+        );
+
+        if (empty($metrics)) {
+            return [];
+        }
+
+        $metric = $metrics[0];
+        return [
+            'poc' => (float)($metric->poc ?? 0),
+            'vah' => (float)($metric->vah ?? 0),
+            'val' => (float)($metric->val ?? 0),
+            'lvns' => json_decode($metric->lvns ?? '[]', true),
+            'hvns' => json_decode($metric->hvns ?? '[]', true),
+            'total_volume' => (int)($metric->total_volume ?? 0),
+        ];
+    }
+
+    protected function loadOrderFlow(): array
+    {
+        // Fetch recent order flow data (buy/sell pressure, CVD)
+        $row = DB::table('symbols')->select('id')->where('symbol', $this->symbol)->first();
+        if (!$row) {
+            return [];
+        }
+        $symbolId = $row->id;
+
+        $flow = DB::select(
+            'SELECT bucket, delta, cumulative_delta, buy_pressure, sell_pressure
+             FROM order_flow
+             WHERE symbol_id = ?
+             ORDER BY bucket DESC
+             LIMIT 1',
+            [$symbolId]
+        );
+
+        if (empty($flow)) {
+            return [];
+        }
+
+        $f = $flow[0];
+        return [
+            'delta' => (int)($f->delta ?? 0),
+            'cvd' => (int)($f->cumulative_delta ?? 0),
+            'buy_pressure' => (float)($f->buy_pressure ?? 50),
+            'sell_pressure' => (float)($f->sell_pressure ?? 50),
+        ];
+    }
+
+    protected function loadMarketState(): array
+    {
+        // Fetch current market state (BALANCE/IMBALANCE)
+        $row = DB::table('symbols')->select('id')->where('symbol', $this->symbol)->first();
+        if (!$row) {
+            return [];
+        }
+        $symbolId = $row->id;
+
+        $state = DB::select(
+            'SELECT time, state, confidence, poc, balance_high, balance_low
+             FROM market_state
+             WHERE symbol_id = ?
+             ORDER BY time DESC
+             LIMIT 1',
+            [$symbolId]
+        );
+
+        if (empty($state)) {
+            return [];
+        }
+
+        $s = $state[0];
+        return [
+            'state' => $s->state ?? 'UNKNOWN',
+            'confidence' => (int)($s->confidence ?? 0),
+            'poc' => (float)($s->poc ?? 0),
+            'balance_high' => (float)($s->balance_high ?? 0),
+            'balance_low' => (float)($s->balance_low ?? 0),
+            'time' => $s->time ?? null,
+        ];
+    }
+
+    protected function loadLVNAlert(): array
+    {
+        // Get current price and nearby LVNs
+        $row = DB::table('symbols')->select('id')->where('symbol', $this->symbol)->first();
+        if (!$row) {
+            return [];
+        }
+        $symbolId = $row->id;
+
+        // Get current price
+        $priceRow = DB::select(
+            'SELECT close FROM candles WHERE symbol_id = ? ORDER BY time DESC LIMIT 1',
+            [$symbolId]
+        );
+        
+        if (empty($priceRow)) {
+            return [];
+        }
+        
+        $currentPrice = (float)$priceRow[0]->close;
+
+        // Get recent LVNs
+        $metrics = DB::select(
+            'SELECT lvns FROM profile_metrics 
+             WHERE symbol_id = ? AND lvns IS NOT NULL AND lvns::text != \'[]\'
+             ORDER BY bucket DESC LIMIT 5',
+            [$symbolId]
+        );
+
+        if (empty($metrics)) {
+            return [];
+        }
+
+        // Collect all LVNs
+        $allLvns = [];
+        foreach ($metrics as $metric) {
+            $lvns = json_decode($metric->lvns, true);
+            if (is_array($lvns)) {
+                $allLvns = array_merge($allLvns, $lvns);
+            }
+        }
+
+        if (empty($allLvns)) {
+            return [];
+        }
+
+        // Find closest LVN
+        $closestLvn = null;
+        $minDistance = PHP_FLOAT_MAX;
+
+        foreach ($allLvns as $lvn) {
+            $distance = abs($currentPrice - $lvn) / $lvn * 100;
+            if ($distance < $minDistance) {
+                $minDistance = $distance;
+                $closestLvn = $lvn;
+            }
+        }
+
+        if (!$closestLvn) {
+            return [];
+        }
+
+        $direction = $currentPrice < $closestLvn ? 'UP' : 'DOWN';
+        $isNear = $minDistance <= 0.5; // Alert threshold
+
+        return [
+            'alert' => $isNear,
+            'lvn_price' => $closestLvn,
+            'current_price' => $currentPrice,
+            'distance_pct' => round($minDistance, 2),
+            'distance_dollars' => round(abs($currentPrice - $closestLvn), 2),
+            'direction' => $direction,
+        ];
+    }
+
+    protected function loadAggressiveFlow(): array
+    {
+        // Calculate aggressive flow score from recent order flow data
+        $row = DB::table('symbols')->select('id')->where('symbol', $this->symbol)->first();
+        if (!$row) {
+            return [];
+        }
+        $symbolId = $row->id;
+
+        // Get most recent order flow data (last 5 buckets)
+        $flow = DB::select(
+            "SELECT delta, cumulative_delta, buy_pressure, sell_pressure
+             FROM order_flow
+             WHERE symbol_id = ?
+             ORDER BY bucket DESC
+             LIMIT 5",
+            [$symbolId]
+        );
+
+        if (empty($flow)) {
+            return [];
+        }
+
+        // Get recent volume (last candle vs average)
+        $volumeData = DB::select(
+            "SELECT 
+                (SELECT AVG(volume) FROM candles WHERE symbol_id = ? LIMIT 100) as avg_volume,
+                (SELECT volume FROM candles WHERE symbol_id = ? ORDER BY time DESC LIMIT 1) as recent_volume",
+            [$symbolId, $symbolId]
+        );
+
+        $avgVolume = $volumeData[0]->avg_volume ?? 1;
+        $recentVolume = $volumeData[0]->recent_volume ?? 0;
+        $volumeRatio = $avgVolume > 0 ? $recentVolume / $avgVolume : 1.0;
+
+        // Calculate metrics
+        $currentFlow = $flow[0];
+        $buyPressure = (float)($currentFlow->buy_pressure ?? 50);
+        $sellPressure = (float)($currentFlow->sell_pressure ?? 50);
+        
+        // CVD momentum
+        $cvdMomentum = 0;
+        if (count($flow) >= 2) {
+            $cvdStart = (int)($flow[count($flow)-1]->cumulative_delta ?? 0);
+            $cvdEnd = (int)($flow[0]->cumulative_delta ?? 0);
+            $cvdMomentum = $cvdEnd - $cvdStart;
+        }
+
+        // Calculate score
+        $score = 0;
+        if ($volumeRatio >= 2.0) $score += 20;
+        if (abs($cvdMomentum) >= 1000) $score += 30;
+        if ($buyPressure >= 70 || $sellPressure >= 70) $score += 20;
+
+        // Determine direction
+        if ($buyPressure >= 70) {
+            $direction = 'BUY';
+        } elseif ($sellPressure >= 70) {
+            $direction = 'SELL';
+        } elseif ($cvdMomentum > 500) {
+            $direction = 'BUY';
+        } elseif ($cvdMomentum < -500) {
+            $direction = 'SELL';
+        } else {
+            $direction = 'NEUTRAL';
+        }
+
+        return [
+            'score' => min(100, (int)$score),
+            'direction' => $direction,
+            'volume_ratio' => round($volumeRatio, 2),
+            'cvd_momentum' => $cvdMomentum,
+            'buy_pressure' => round($buyPressure, 1),
+            'sell_pressure' => round($sellPressure, 1),
+            'is_aggressive' => $score >= 50
+        ];
+    }
+
+    protected function loadAccountInfo(): array
+    {
+        // Check if auto-trading is enabled and try to get real account data
+        $autoTradingEnabled = env('AUTO_TRADING_ENABLED', 'false') === 'true';
+        $isConnected = false;
+        $accountData = [
+            'portfolio_value' => 100000.00,
+            'buying_power' => 100000.00,
+            'cash' => 100000.00,
+            'equity' => 100000.00,
+            'daily_pnl' => 0.00,
+            'daily_pnl_pct' => 0.00,
+        ];
+
+        // Try to get real account data from Alpaca if auto-trading is enabled
+        if ($autoTradingEnabled) {
+            try {
+                $apiKey = env('ALPACA_API_KEY');
+                $secretKey = env('ALPACA_SECRET_KEY');
+                
+                if ($apiKey && $secretKey) {
+                    // Call Alpaca API to get account info
+                    $response = \Illuminate\Support\Facades\Http::withHeaders([
+                        'APCA-API-KEY-ID' => $apiKey,
+                        'APCA-API-SECRET-KEY' => $secretKey,
+                    ])->get('https://paper-api.alpaca.markets/v2/account');
+                    
+                    if ($response->successful()) {
+                        $account = $response->json();
+                        $isConnected = true;
+                        
+                        $accountData = [
+                            'portfolio_value' => (float)$account['portfolio_value'],
+                            'buying_power' => (float)$account['buying_power'],
+                            'cash' => (float)$account['cash'],
+                            'equity' => (float)$account['equity'],
+                            'daily_pnl' => (float)($account['equity'] - $account['last_equity']),
+                            'daily_pnl_pct' => $account['last_equity'] > 0 
+                                ? (($account['equity'] - $account['last_equity']) / $account['last_equity'] * 100)
+                                : 0,
+                        ];
+                    }
+                }
+            } catch (\Exception $e) {
+                // Silently fail and use mock data
+            }
+        }
+
+        // Count today's trades
+        $tradesCount = DB::select(
+            "SELECT COUNT(*) as count 
+             FROM signals 
+             WHERE type IN ('BUY', 'SELL') 
+                AND time::date = CURRENT_DATE"
+        );
+        $tradesToday = $tradesCount[0]->count ?? 0;
+
+        // Calculate win rate from recent trades
+        $winRate = 0.0;
+        if ($tradesToday > 0) {
+            // Simple win rate calculation (would need more sophisticated logic in production)
+            $winRate = 50.0; // Placeholder
+        }
+
+        return array_merge($accountData, [
+            'risk_per_trade_pct' => (float)env('RISK_PER_TRADE_PCT', 1.0),
+            'max_positions' => (int)env('MAX_POSITIONS', 1),
+            'max_daily_loss_pct' => (float)env('MAX_DAILY_LOSS_PCT', 3.0),
+            'trades_today' => $tradesToday,
+            'win_rate' => $winRate,
+            'is_connected' => $isConnected,
+        ]);
+    }
+
+    protected function loadPositions(): array
+    {
+        // Try to get positions from Alpaca (if auto-trading is enabled)
+        // For now, return empty - will populate when API keys are configured
+        return [];
+    }
+
+    protected function loadTradeHistory(): array
+    {
+        // Get recent trades from signals table
+        $trades = DB::select(
+            "SELECT s.time AT TIME ZONE 'America/New_York' as time_et, 
+                    s.type, 
+                    s.details,
+                    sym.symbol
+             FROM signals s
+             JOIN symbols sym ON s.symbol_id = sym.id
+             WHERE s.type IN ('BUY', 'SELL')
+             ORDER BY s.time DESC
+             LIMIT 20"
+        );
+
+        return array_map(function($trade) {
+            $details = json_decode($trade->details, true);
+            return [
+                'time' => $trade->time_et,
+                'symbol' => $trade->symbol,
+                'type' => $trade->type,
+                'qty' => $details['qty'] ?? 0,
+                'price' => $details['price'] ?? 0,
+                'reason' => $details['reason'] ?? '',
+            ];
+        }, $trades);
+    }
+
+    protected function getSessionInfo(): array
+    {
+        // Get current time in ET (US Eastern Time)
+        $now = new \DateTime('now', new \DateTimeZone('America/New_York'));
+        $hour = (int)$now->format('H');
+        $minute = (int)$now->format('i');
+        $timeMinutes = $hour * 60 + $minute;
+        
+        // Define sessions (in ET)
+        $sessions = [
+            'ASIAN' => ['start' => 18 * 60, 'end' => 3 * 60, 'name' => 'Asian', 'icon' => '🌏'],
+            'LONDON' => ['start' => 3 * 60, 'end' => 11 * 60, 'name' => 'London', 'icon' => '🇬🇧'],
+            'NEW_YORK' => ['start' => 9 * 60 + 30, 'end' => 16 * 60, 'name' => 'New York', 'icon' => '🗽'],
+        ];
+        
+        $currentSession = 'PRE_MARKET';
+        $sessionName = 'Pre-Market';
+        $sessionIcon = '🌅';
+        $recommendedSetup = 'Wait for market open';
+        
+        // Check which session we're in
+        if ($timeMinutes >= $sessions['NEW_YORK']['start'] && $timeMinutes < $sessions['NEW_YORK']['end']) {
+            $currentSession = 'NEW_YORK';
+            $sessionName = $sessions['NEW_YORK']['name'];
+            $sessionIcon = $sessions['NEW_YORK']['icon'];
+            $recommendedSetup = 'Trend Model - Best for momentum trades';
+        } elseif ($timeMinutes >= $sessions['LONDON']['start'] && $timeMinutes < $sessions['LONDON']['end']) {
+            $currentSession = 'LONDON';
+            $sessionName = $sessions['LONDON']['name'];
+            $sessionIcon = $sessions['LONDON']['icon'];
+            $recommendedSetup = 'Mean Reversion - Best for failed breakouts';
+        } elseif ($timeMinutes >= $sessions['ASIAN']['start'] || $timeMinutes < $sessions['ASIAN']['end']) {
+            $currentSession = 'ASIAN';
+            $sessionName = $sessions['ASIAN']['name'];
+            $sessionIcon = $sessions['ASIAN']['icon'];
+            $recommendedSetup = 'Low volatility - Reduced opportunities';
+        }
+        
+        return [
+            'session' => $currentSession,
+            'name' => $sessionName,
+            'icon' => $sessionIcon,
+            'time_et' => $now->format('H:i T'),
+            'recommended_setup' => $recommendedSetup,
+            'is_market_hours' => $currentSession === 'NEW_YORK',
+        ];
+    }
+
+    public function render()
+    {
+        $this->loadData();
+        $signals = $this->loadSignals();
+        $volumeProfile = $this->loadVolumeProfile();
+        $orderFlow = $this->loadOrderFlow();
+        $this->marketState = $this->loadMarketState();
+        $this->lvnAlert = $this->loadLVNAlert();
+        $this->aggressiveFlow = $this->loadAggressiveFlow();
+        $this->sessionInfo = $this->getSessionInfo();
+        $this->accountInfo = $this->loadAccountInfo();
+        $this->positions = $this->loadPositions();
+        $this->tradeHistory = $this->loadTradeHistory();
+        
+        // Dispatch browser event with data for Chart.js
+        $this->dispatch('chart-data', 
+            labels: $this->labels, 
+            closes: $this->closes, 
+            signals: $signals,
+            volumeProfile: $volumeProfile,
+            orderFlow: $orderFlow
+        );
+        
+        return view('livewire.stock-detail');
+    }
+}

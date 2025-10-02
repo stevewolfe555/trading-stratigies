@@ -1,0 +1,136 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg15
+    container_name: trading_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-trading}
+    ports:
+      - "${HOST_POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-trading}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7-alpine
+    container_name: trading_redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${HOST_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+
+  ingestion:
+    build:
+      context: ./services/ingestion
+    container_name: trading_ingestion
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/ingestion:/app
+    command: ["python", "-m", "app.main"]
+
+  engine:
+    build:
+      context: ./services/engine
+    container_name: trading_engine
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/engine:/app
+    command: ["python", "-m", "app.main"]
+
+  reverb:
+    build:
+      context: ./docker/php-ws
+    container_name: trading_reverb
+    working_dir: /app
+    volumes:
+      - ./web:/app
+    ports:
+      - "${HOST_REVERB_PORT:-8080}:8080"
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      BROADCAST_CONNECTION: reverb
+      # Reverb server bind
+      REVERB_SERVER_HOST: 0.0.0.0
+      REVERB_SERVER_PORT: 8080
+      # App credentials (dev)
+      REVERB_APP_ID: ${REVERB_APP_ID:-local-app}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local-key}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local-secret}
+      # Where the app (inside Docker network) reaches the Reverb server
+      REVERB_HOST: reverb
+      REVERB_PORT: 8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["sh", "-lc", "composer install --no-interaction --prefer-dist && php artisan reverb:start --host=0.0.0.0 --port=8080"]
+
+  relay:
+    build:
+      context: ./docker/php-ws
+    container_name: trading_relay
+    working_dir: /app
+    volumes:
+      - ./web:/app
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      BROADCAST_CONNECTION: reverb
+      # Inside Docker network, hit Reverb by service name
+      REVERB_HOST: reverb
+      REVERB_PORT: 8080
+      REVERB_APP_ID: ${REVERB_APP_ID:-local-app}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local-key}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local-secret}
+      # Use the Docker redis service directly
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      reverb:
+        condition: service_started
+    command: ["sh", "-lc", "composer install --no-interaction --prefer-dist && php artisan relay:redis"]
+
+  profile_calculator:
+    build:
+      context: ./services/profile_calculator
+    container_name: trading_profile_calculator
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./services/profile_calculator:/app
+    command: ["python", "-m", "app.main"]
+
+volumes:
+  db_data:
+  redis_data:

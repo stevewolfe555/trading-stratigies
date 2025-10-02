@@ -1,0 +1,33 @@
+# General
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.cache/
+
+# Node/Laravel
+node_modules/
+vendor/
+public/build/
+public/hot
+storage/
+bootstrap/cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Docker
+docker-data/
+db_data/
+redis_data/
+*.pid

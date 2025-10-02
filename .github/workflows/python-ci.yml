@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  python-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [ingestion, engine]
+        python-version: ["3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install requirements
+        working-directory: services/${{ matrix.service }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile Python files
+        run: |
+          find services/${{ matrix.service }}/app -name "*.py" -print0 | xargs -0 -I{} python -m py_compile {}
