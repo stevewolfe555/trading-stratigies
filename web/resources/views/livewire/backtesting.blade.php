@@ -437,7 +437,10 @@
 let equityChart = null;
 
 function initChart(equityCurve) {
-    if (!equityCurve) return;
+    if (!equityCurve || !equityCurve.labels || equityCurve.labels.length === 0) {
+        console.log('No equity curve data available');
+        return;
+    }
 
     const container = document.getElementById('equity-chart');
 
@@ -461,6 +464,10 @@ function initChart(equityCurve) {
             vertLines: { color: '#f0f0f0' },
             horzLines: { color: '#f0f0f0' },
         },
+        timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+        },
     });
 
     const lineSeries = equityChart.addLineSeries({
@@ -468,13 +475,21 @@ function initChart(equityCurve) {
         lineWidth: 2,
     });
 
-    const data = equityCurve.labels.map((label, i) => ({
-        time: label,
-        value: equityCurve.equity[i]
-    }));
+    // Convert date strings to Unix timestamps
+    const data = equityCurve.labels.map((label, i) => {
+        const date = new Date(label);
+        return {
+            time: Math.floor(date.getTime() / 1000), // Unix timestamp in seconds
+            value: parseFloat(equityCurve.equity[i])
+        };
+    }).filter(d => !isNaN(d.time) && !isNaN(d.value));
 
-    lineSeries.setData(data);
-    equityChart.timeScale().fitContent();
+    console.log('Chart data points:', data.length);
+    
+    if (data.length > 0) {
+        lineSeries.setData(data);
+        equityChart.timeScale().fitContent();
+    }
 }
 
 // Initialize chart after Livewire updates
