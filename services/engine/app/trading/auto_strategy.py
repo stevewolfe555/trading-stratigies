@@ -24,6 +24,7 @@ from typing import Optional, Dict
 from loguru import logger
 from .alpaca_client import AlpacaTradingClient
 from .position_manager import PositionManager
+from .order_monitor import OrderMonitor
 from .atr_calculator import get_atr_based_levels
 from ..strategy_manager import StrategyManager
 from ..strategies.auction_market_strategy import AuctionMarketStrategy
@@ -34,6 +35,7 @@ class AutoTradingStrategy:
     Automated trading strategy using market state and aggressive flow.
     
     Now uses database-backed configuration via StrategyManager.
+    Includes OrderMonitor for pending order management.
     """
     
     def __init__(self, db_conn, alpaca_client: AlpacaTradingClient, position_manager: PositionManager):
@@ -41,6 +43,13 @@ class AutoTradingStrategy:
         self.client = alpaca_client
         self.position_manager = position_manager
         self.strategy_manager = StrategyManager(db_conn)
+        
+        # Initialize Order Monitor
+        self.order_monitor = OrderMonitor(
+            alpaca_client=alpaca_client,
+            max_order_age_minutes=5,  # Cancel orders after 5 minutes
+            max_slippage_pct=1.0  # Cancel if price moves >1%
+        )
         
         # Load initial configs
         self.strategy_manager.load_all_configs()
@@ -269,6 +278,9 @@ class AutoTradingStrategy:
             )
             
             if order:
+                # Track order with OrderMonitor
+                self.order_monitor.track_order(order, entry_price)
+                
                 # Log trade
                 self.position_manager.log_trade(
                     symbol=symbol,
@@ -290,6 +302,37 @@ class AutoTradingStrategy:
             self.db_conn.rollback()  # Rollback failed transaction
             return False
     
+    def check_pending_orders(self, current_prices: Dict[str, float]) -> None:
+        """
+        Check all pending orders and handle fills/cancellations.
+        
+        Should be called every trading cycle.
+        
+        Args:
+            current_prices: Dict of symbol -> current price
+        """
+        try:
+            result = self.order_monitor.check_orders(current_prices)
+            
+            # Handle filled orders
+            for filled_order in result['filled']:
+                symbol = filled_order['symbol']
+                logger.info(f"✅ Order filled: {symbol}")
+                # Position manager will track this automatically
+            
+            # Handle cancelled orders
+            for cancelled_order in result['cancelled']:
+                symbol = cancelled_order['symbol']
+                reason = cancelled_order.get('reason', 'unknown')
+                logger.warning(f"❌ Order cancelled: {symbol} - Reason: {reason}")
+            
+            # Periodically reconcile orders with broker
+            if len(result['pending']) > 0:
+                self.order_monitor.reconcile_orders()
+                
+        except Exception as e:
+            logger.error(f"Error checking pending orders: {e}")
+    
     def check_and_execute(self, symbol_id: int, symbol: str):
         """
         Check for entry signals and execute if conditions met.
@@ -302,6 +345,11 @@ class AutoTradingStrategy:
             position = self.client.get_position(symbol)
             if position:
                 logger.debug(f"Already have position in {symbol}, skipping")
+                return
+            
+            # Check if we have a pending order for this symbol
+            if self.order_monitor.has_pending_order(symbol):
+                logger.debug(f"Pending order exists for {symbol}, skipping")
                 return
             
             # Evaluate entry signal
