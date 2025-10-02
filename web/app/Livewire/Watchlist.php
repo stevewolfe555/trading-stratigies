@@ -144,38 +144,74 @@ class Watchlist extends Component
 
     public function loadOpenPositions(): void
     {
-        // Get recent trades (last 20)
-        $trades = DB::select(
-            "SELECT s.time AT TIME ZONE 'America/New_York' as time_et, 
-                    s.type, 
-                    s.details,
-                    sym.symbol
-             FROM signals s
-             JOIN symbols sym ON s.symbol_id = sym.id
-             WHERE s.type IN ('BUY', 'SELL')
-             ORDER BY s.time DESC
-             LIMIT 20"
-        );
-
-        $this->openPositions = array_map(function($trade) {
-            $details = json_decode($trade->details, true);
-            return [
-                'time' => $trade->time_et,
-                'symbol' => $trade->symbol,
-                'type' => $trade->type,
-                'qty' => $details['qty'] ?? 0,
-                'price' => $details['price'] ?? 0,
-                'reason' => $details['reason'] ?? '',
-            ];
-        }, $trades);
-
-        // Count today's trades
-        $this->tradesCount = DB::selectOne(
-            "SELECT COUNT(*) as count 
-             FROM signals 
-             WHERE type IN ('BUY', 'SELL') 
-                AND time::date = CURRENT_DATE"
-        )->count ?? 0;
+        $apiKey = env('ALPACA_API_KEY');
+        $secretKey = env('ALPACA_SECRET_KEY');
+        
+        $positions = [];
+        $pendingOrders = [];
+        
+        if ($apiKey && $secretKey) {
+            try {
+                // Get open positions from Alpaca
+                $positionsResponse = \Illuminate\Support\Facades\Http::withHeaders([
+                    'APCA-API-KEY-ID' => $apiKey,
+                    'APCA-API-SECRET-KEY' => $secretKey,
+                ])->get('https://paper-api.alpaca.markets/v2/positions');
+                
+                if ($positionsResponse->successful()) {
+                    $positions = collect($positionsResponse->json())->map(function($pos) {
+                        $entryPrice = (float)$pos['avg_entry_price'];
+                        $currentPrice = (float)$pos['current_price'];
+                        $qty = (int)$pos['qty'];
+                        $unrealizedPl = (float)$pos['unrealized_pl'];
+                        $unrealizedPlPct = (float)$pos['unrealized_plpc'] * 100;
+                        
+                        return [
+                            'symbol' => $pos['symbol'],
+                            'side' => $pos['side'],
+                            'qty' => $qty,
+                            'entry_price' => $entryPrice,
+                            'current_price' => $currentPrice,
+                            'unrealized_pl' => $unrealizedPl,
+                            'unrealized_pl_pct' => $unrealizedPlPct,
+                            'market_value' => (float)$pos['market_value'],
+                            'status' => 'FILLED',
+                        ];
+                    })->toArray();
+                }
+                
+                // Get pending orders from Alpaca
+                $ordersResponse = \Illuminate\Support\Facades\Http::withHeaders([
+                    'APCA-API-KEY-ID' => $apiKey,
+                    'APCA-API-SECRET-KEY' => $secretKey,
+                ])->get('https://paper-api.alpaca.markets/v2/orders', [
+                    'status' => 'open'
+                ]);
+                
+                if ($ordersResponse->successful()) {
+                    $pendingOrders = collect($ordersResponse->json())->map(function($order) {
+                        return [
+                            'symbol' => $order['symbol'],
+                            'side' => $order['side'],
+                            'qty' => (int)$order['qty'],
+                            'order_type' => $order['type'],
+                            'limit_price' => isset($order['limit_price']) ? (float)$order['limit_price'] : null,
+                            'submitted_at' => $order['submitted_at'],
+                            'status' => 'PENDING',
+                        ];
+                    })->toArray();
+                }
+                
+            } catch (\Exception $e) {
+                logger()->error("Error loading positions/orders: " . $e->getMessage());
+            }
+        }
+        
+        // Merge positions and pending orders
+        $this->openPositions = array_merge($positions, $pendingOrders);
+        
+        // Count today's trades (actual fills)
+        $this->tradesCount = count($positions);
     }
 
     public function loadAccountInfo(): void

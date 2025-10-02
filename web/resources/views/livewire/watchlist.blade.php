@@ -180,36 +180,97 @@
     </div>
     @endif
 
-    <!-- Recent Trades Section -->
+    <!-- Open Positions & Pending Orders -->
     @if(count($openPositions) > 0)
     <div class="bg-white p-4 rounded-lg shadow">
         <div class="flex items-center justify-between mb-3">
-            <h2 class="text-lg font-semibold text-gray-900">📊 Recent Trades ({{ $tradesCount }} today)</h2>
+            <h2 class="text-lg font-semibold text-gray-900">📊 Positions & Orders ({{ $tradesCount }} open)</h2>
+            <span class="text-xs text-gray-500">Auto-refreshing</span>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            @foreach($openPositions as $trade)
-            <a href="{{ route('stock.detail', ['symbol' => $trade['symbol']]) }}" class="block border-l-4 {{ $trade['type'] === 'BUY' ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50' }} p-3 rounded hover:shadow-md hover:border-blue-400 transition-all cursor-pointer">
+            @foreach($openPositions as $position)
+            <a href="{{ route('stock.detail', ['symbol' => $position['symbol']]) }}" 
+               class="block border-l-4 p-3 rounded hover:shadow-md transition-all cursor-pointer
+                      @if($position['status'] === 'PENDING')
+                          border-yellow-500 bg-yellow-50
+                      @elseif(isset($position['unrealized_pl']) && $position['unrealized_pl'] >= 0)
+                          border-green-500 bg-green-50
+                      @else
+                          border-red-500 bg-red-50
+                      @endif">
+                
+                <!-- Header: Symbol & Status -->
                 <div class="flex items-center justify-between mb-2">
-                    <div>
-                        <span class="font-bold text-lg {{ $trade['type'] === 'BUY' ? 'text-green-700' : 'text-red-700' }}">
-                            {{ \App\Models\Symbol::formatSymbol($trade['symbol']) }}
+                    <div class="flex items-center gap-2">
+                        <span class="font-bold text-lg text-gray-900">
+                            {{ \App\Models\Symbol::formatSymbol($position['symbol']) }}
                         </span>
-                        <span class="ml-2 text-sm {{ $trade['type'] === 'BUY' ? 'text-green-600' : 'text-red-600' }}">
-                            {{ $trade['type'] }}
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold
+                                     {{ $position['side'] === 'long' || $position['side'] === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' }}">
+                            {{ strtoupper($position['side']) }}
                         </span>
                     </div>
-                    <div class="text-right">
-                        <div class="font-semibold">${{ number_format($trade['price'], 2) }}</div>
-                        <div class="text-xs text-gray-600">{{ $trade['qty'] }} shares</div>
+                    
+                    @if($position['status'] === 'PENDING')
+                    <span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-semibold">
+                        PENDING
+                    </span>
+                    @endif
+                </div>
+                
+                <!-- Position Details -->
+                @if($position['status'] === 'FILLED')
+                    <!-- Open Position with P&L -->
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Entry:</span>
+                            <span class="font-semibold">${{ number_format($position['entry_price'], 2) }}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Current:</span>
+                            <span class="font-semibold">${{ number_format($position['current_price'], 2) }}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Qty:</span>
+                            <span class="font-semibold">{{ $position['qty'] }} shares</span>
+                        </div>
+                        
+                        <!-- P&L Display -->
+                        <div class="pt-2 border-t mt-2">
+                            <div class="flex justify-between items-center">
+                                <span class="text-xs text-gray-600">Unrealized P&L:</span>
+                                <div class="text-right">
+                                    <div class="text-lg font-bold {{ $position['unrealized_pl'] >= 0 ? 'text-green-600' : 'text-red-600' }}">
+                                        {{ $position['unrealized_pl'] >= 0 ? '+' : '' }}${{ number_format($position['unrealized_pl'], 2) }}
+                                    </div>
+                                    <div class="text-xs {{ $position['unrealized_pl'] >= 0 ? 'text-green-600' : 'text-red-600' }}">
+                                        {{ $position['unrealized_pl'] >= 0 ? '+' : '' }}{{ number_format($position['unrealized_pl_pct'], 2) }}%
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="text-xs text-gray-600">
-                    {{ \Carbon\Carbon::parse($trade['time'])->format('M d, H:i') }}
-                </div>
-                @if($trade['reason'])
-                <div class="text-xs text-gray-500 mt-1 truncate" title="{{ $trade['reason'] }}">
-                    {{ $trade['reason'] }}
-                </div>
+                @else
+                    <!-- Pending Order -->
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Type:</span>
+                            <span class="font-semibold uppercase">{{ $position['order_type'] }}</span>
+                        </div>
+                        @if($position['limit_price'])
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Limit Price:</span>
+                            <span class="font-semibold">${{ number_format($position['limit_price'], 2) }}</span>
+                        </div>
+                        @endif
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Qty:</span>
+                            <span class="font-semibold">{{ $position['qty'] }} shares</span>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-2">
+                            Submitted: {{ \Carbon\Carbon::parse($position['submitted_at'])->diffForHumans() }}
+                        </div>
+                    </div>
                 @endif
             </a>
             @endforeach
