@@ -53,19 +53,52 @@ class IGProvider:
         self.security_token = None
         self.authenticated = False
         
+        # Rate limiting and failure tracking
+        self.auth_attempts = 0
+        self.max_auth_attempts = 3  # Max attempts before giving up
+        self.last_auth_attempt = 0
+        self.auth_cooldown = 300  # 5 minutes cooldown after max attempts
+        self.permanently_disabled = False
+        
         logger.info(f"IG Provider initialized ({'DEMO' if demo else 'LIVE'} mode)")
     
     def authenticate(self) -> bool:
         """
-        Authenticate with IG API.
+        Authenticate with IG API with rate limiting protection.
         
         IG requires encryption for passwords in v3+.
         Using v2 which accepts plain text passwords.
         
+        Rate Limiting:
+        - Max 3 attempts
+        - 5 minute cooldown after max attempts
+        - Permanently disabled if account suspended
+        
         Returns:
             True if successful, False otherwise
         """
+        # Check if permanently disabled
+        if self.permanently_disabled:
+            logger.error("IG Provider permanently disabled due to account suspension")
+            return False
+        
+        # Check if we've exceeded max attempts
+        if self.auth_attempts >= self.max_auth_attempts:
+            time_since_last = time.time() - self.last_auth_attempt
+            if time_since_last < self.auth_cooldown:
+                remaining = int(self.auth_cooldown - time_since_last)
+                logger.warning(f"Max auth attempts reached. Cooldown: {remaining}s remaining")
+                return False
+            else:
+                # Reset after cooldown
+                logger.info("Cooldown period over, resetting auth attempts")
+                self.auth_attempts = 0
+        
         try:
+            self.auth_attempts += 1
+            self.last_auth_attempt = time.time()
+            
+            logger.info(f"Authentication attempt {self.auth_attempts}/{self.max_auth_attempts}")
             # Headers matching IG's official REST API Companion
             headers = {
                 'X-IG-API-KEY': self.api_key,
@@ -96,6 +129,7 @@ class IGProvider:
                 self.cst_token = response.headers.get('CST')
                 self.security_token = response.headers.get('X-SECURITY-TOKEN')
                 self.authenticated = True
+                self.auth_attempts = 0  # Reset on success
                 
                 account_info = response.json()
                 logger.info(
@@ -104,7 +138,17 @@ class IGProvider:
                 )
                 return True
             else:
-                logger.error(f"IG authentication failed: {response.status_code} - {response.text}")
+                error_text = response.text
+                logger.error(f"IG authentication failed: {response.status_code} - {error_text}")
+                
+                # Check for account suspension
+                if 'client-suspended' in error_text.lower():
+                    self.permanently_disabled = True
+                    logger.error(
+                        "⛔ Account suspended! IG Provider permanently disabled. "
+                        "Please unlock your account via IG website or wait 30-60 minutes."
+                    )
+                
                 return False
                 
         except Exception as e:
