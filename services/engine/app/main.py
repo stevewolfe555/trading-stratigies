@@ -52,6 +52,7 @@ def run():
                     run_market_state_detection(db_conn)
                 except Exception as e:
                     logger.error(f"Market state detection error: {e}")
+                    db_conn.rollback()  # Rollback failed transaction
             
             # Run LVN alerts every 2 seconds (every 2 loops)
             if loop_count % 2 == 0:
@@ -59,12 +60,14 @@ def run():
                     run_lvn_alerts(db_conn)
                 except Exception as e:
                     logger.error(f"LVN alert error: {e}")
+                    db_conn.rollback()  # Rollback failed transaction
             
             # Run aggressive flow detection every 1 second (every loop) - CRITICAL
             try:
                 run_aggressive_flow_detection(db_conn)
             except Exception as e:
                 logger.error(f"Aggressive flow detection error: {e}")
+                db_conn.rollback()  # Rollback failed transaction
             
             # Run automated trading every 1 second (every loop) if enabled - CRITICAL
             if auto_trading_enabled:
@@ -73,6 +76,7 @@ def run():
                     run_auto_trading(db_conn)
                 except Exception as e:
                     logger.error(f"Auto trading error: {e}")
+                    db_conn.rollback()  # Rollback failed transaction
             
             loop_count += 1
             
