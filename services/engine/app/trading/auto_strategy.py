@@ -169,21 +169,35 @@ class AutoTradingStrategy:
             else:
                 cvd_momentum = 0
             
-            # Get ATR
+            # Calculate ATR from recent candles
             cur.execute("""
-                SELECT atr FROM candles 
+                SELECT high, low, close 
+                FROM candles 
                 WHERE symbol_id = %s 
                 ORDER BY time DESC 
-                LIMIT 1
+                LIMIT 14
             """, (symbol_id,))
             
-            atr_row = cur.fetchone()
-            if not atr_row or not atr_row[0]:
-                # Fallback: calculate ATR from get_atr_based_levels
-                _, _ = get_atr_based_levels(self.conn, symbol_id, current_price, 'buy')
-                atr = 1.0  # Fallback value
+            candles = cur.fetchall()
+            if len(candles) >= 14:
+                # Calculate ATR (14-period)
+                true_ranges = []
+                for i in range(1, len(candles)):
+                    high = float(candles[i][0])
+                    low = float(candles[i][1])
+                    prev_close = float(candles[i-1][2])
+                    
+                    tr = max(
+                        high - low,
+                        abs(high - prev_close),
+                        abs(low - prev_close)
+                    )
+                    true_ranges.append(tr)
+                
+                atr = sum(true_ranges) / len(true_ranges) if true_ranges else 1.0
             else:
-                atr = float(atr_row[0])
+                # Not enough data, use 1% of price as fallback
+                atr = current_price * 0.01
             
             # Use shared strategy to evaluate entry signal
             signal = self.strategy.evaluate_entry_signal(
