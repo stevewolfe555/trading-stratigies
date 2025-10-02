@@ -1,5 +1,7 @@
 # Trading Playbook Platform
 
+**Last Updated**: 2025-10-02
+
 **Automated trading system** with Auction Market Theory strategies, real-time execution, and professional-grade analytics.
 
 ![Platform Status](https://img.shields.io/badge/status-live%20trading-brightgreen)
