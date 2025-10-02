@@ -36,6 +36,9 @@ new class extends Component
                     <x-nav-link :href="route('strategies')" :active="request()->routeIs('strategies')" wire:navigate>
                         ⚙️ Strategies
                     </x-nav-link>
+                    <x-nav-link :href="route('backtesting')" :active="request()->routeIs('backtesting')" wire:navigate>
+                        🧪 Backtesting
+                    </x-nav-link>
                     <x-nav-link :href="route('account')" :active="request()->routeIs('account')" wire:navigate>
                         💼 Account
                     </x-nav-link>
