@@ -113,8 +113,7 @@
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             @foreach($openPositions as $position)
-            <a href="{{ route('stock.detail', ['symbol' => $position['symbol']]) }}" 
-               class="block border-l-4 p-3 rounded hover:shadow-md transition-all cursor-pointer
+            <div class="border-l-4 p-3 rounded hover:shadow-md transition-all
                       @if($position['status'] === 'PENDING')
                           border-yellow-500 bg-yellow-50
                       @elseif(isset($position['unrealized_pl']) && $position['unrealized_pl'] >= 0)
@@ -125,7 +124,7 @@
                 
                 <!-- Header: Symbol & Status -->
                 <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-2">
+                    <a href="{{ route('stock.detail', ['symbol' => $position['symbol']]) }}" class="flex items-center gap-2 hover:underline">
                         <span class="font-bold text-lg text-gray-900">
                             {{ \App\Models\Symbol::formatSymbol($position['symbol']) }}
                         </span>
@@ -133,9 +132,17 @@
                                      {{ $position['side'] === 'long' || $position['side'] === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' }}">
                             {{ strtoupper($position['side']) }}
                         </span>
-                    </div>
+                    </a>
                     
-                    @if($position['status'] === 'PENDING')
+                    @if($position['status'] === 'FILLED')
+                    <button 
+                        wire:click="closePosition('{{ $position['symbol'] }}')"
+                        wire:confirm="Close {{ $position['symbol'] }} position?"
+                        class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-semibold"
+                        onclick="event.stopPropagation()">
+                        Close
+                    </button>
+                    @elseif($position['status'] === 'PENDING')
                     <span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-semibold">
                         PENDING
                     </span>
@@ -196,7 +203,7 @@
                         </div>
                     </div>
                 @endif
-            </a>
+            </div>
             @endforeach
         </div>
     </div>
