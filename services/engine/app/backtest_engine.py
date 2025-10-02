@@ -1,21 +1,17 @@
 """
-Backtest Engine Module
-
 Main execution logic for backtesting trading strategies.
 Coordinates data loading, signal evaluation, position management, and analysis.
 """
 
-from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from datetime import datetime
+import json
 from loguru import logger
-
 from .backtest_config import BacktestConfig
 from .backtest_data import BacktestDataLoader
 from .backtest_position import BacktestPortfolio, Position
 from .backtest_analysis import BacktestAnalyzer
-from ..strategies.auction_market_strategy import AuctionMarketStrategy
-
-
+from app.strategies.auction_market_strategy import AuctionMarketStrategy
 class BacktestEngine:
     """
     Main backtest engine that coordinates all components.
@@ -223,6 +219,9 @@ class BacktestEngine:
         self.analyzer.save_results(run_id)
         self.analyzer.print_summary()
 
+        # Save constraint analysis
+        self._save_constraint_analysis(run_id)
+
         logger.success("✅ Backtest complete!")
 
     def _create_run(self, symbols: List[str], start_date: datetime, end_date: datetime) -> int:
@@ -240,12 +239,57 @@ class BacktestEngine:
                 start_date,
                 end_date,
                 symbols,
-                self.config.params,
+                json.dumps(self.config.params),
                 'completed',
                 datetime.now()
             ))
 
-            return cur.fetchone()[0]
+            run_id = cur.fetchone()[0]
+            self.config.get_connection().commit()
+            return run_id
+
+    def _save_constraint_analysis(self, run_id: int):
+        """Save constraint analysis data to database."""
+        total_signals = sum(self.portfolio.signals_generated.values())
+        total_blocked = sum(self.portfolio.signals_blocked.values())
+
+        blocked_percentage = 0
+        if total_signals + total_blocked > 0:
+            blocked_percentage = (total_blocked / (total_signals + total_blocked)) * 100
+
+        # Calculate recommendations
+        recommendations = {}
+        if total_blocked > 0:
+            max_positions_needed = len(self.portfolio.positions) + total_blocked
+            recommendations['max_positions_needed'] = max_positions_needed
+            recommendations['capital_needed'] = self.portfolio.initial_capital * (max_positions_needed / max(1, len(self.portfolio.positions)))
+
+        constraint_data = {
+            'signals_generated': total_signals,
+            'signals_blocked': total_blocked,
+            'blocked_percentage': blocked_percentage,
+            'recommendations': recommendations
+        }
+
+        with self.config.get_connection().cursor() as cur:
+            cur.execute("""
+                UPDATE backtest_runs SET
+                    signals_generated = %s,
+                    signals_blocked = %s,
+                    blocked_percentage = %s,
+                    constraint_analysis = %s,
+                    completed_at = %s
+                WHERE id = %s
+            """, (
+                total_signals,
+                total_blocked,
+                blocked_percentage,
+                json.dumps(constraint_data),
+                datetime.now(),
+                run_id
+            ))
+
+            self.config.get_connection().commit()
 
     def _calculate_position_cost(self, signal: Dict, available_cash: float) -> float:
         """Calculate cost of entering position."""

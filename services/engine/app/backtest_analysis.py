@@ -5,8 +5,8 @@ Handles results analysis, reporting, and constraint analysis.
 Provides insights into strategy performance and recommendations.
 """
 
-import psycopg2
 from typing import Dict, List
+from datetime import datetime
 from loguru import logger
 from .versions import get_version_info
 
@@ -26,6 +26,39 @@ class BacktestAnalyzer:
         logger.info("Saving results...")
 
         try:
+            # Update run with summary stats
+            stats = self.portfolio.get_summary_stats()
+            
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE backtest_runs SET
+                        total_trades = %s,
+                        winning_trades = %s,
+                        losing_trades = %s,
+                        win_rate = %s,
+                        total_pnl = %s,
+                        total_pnl_pct = %s,
+                        avg_win = %s,
+                        avg_loss = %s,
+                        largest_win = %s,
+                        largest_loss = %s,
+                        completed_at = %s
+                    WHERE id = %s
+                """, (
+                    stats['total_trades'],
+                    stats['winning_trades'],
+                    stats['losing_trades'],
+                    stats['win_rate'],
+                    stats['total_pnl'],
+                    stats['total_pnl_pct'],
+                    stats['avg_win'],
+                    stats['avg_loss'],
+                    stats['largest_win'],
+                    stats['largest_loss'],
+                    datetime.now(),
+                    run_id
+                ))
+
             # Save trades
             if self.portfolio.trades:
                 with self.conn.cursor() as cur:
@@ -69,7 +102,7 @@ class BacktestAnalyzer:
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s
+                            %s, %s, %s
                         )
                     """, trade_data)
 
@@ -99,9 +132,12 @@ class BacktestAnalyzer:
 
             # Commit transaction
             self.conn.commit()
+            logger.info("Results saved successfully")
 
         except Exception as e:
             logger.error(f"Error saving results: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.conn.rollback()
             raise
 
