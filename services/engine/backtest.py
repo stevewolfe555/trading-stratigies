@@ -42,6 +42,7 @@ def parse_arguments():
     parser.add_argument('--all-symbols', action='store_true', help='Test all available symbols')
 
     # Time period
+    parser.add_argument('--years', type=float, help='Number of years of historical data')
     parser.add_argument('--start-date', type=str, help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end-date', type=str, help='End date (YYYY-MM-DD)')
 
