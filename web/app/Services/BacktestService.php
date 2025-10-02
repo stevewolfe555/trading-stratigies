@@ -60,12 +60,14 @@ class BacktestService
 
         try {
             // Create a pending run record first
+            $symbolsArray = $symbols ? explode(',', $symbols) : [];
+            
             $run = BacktestRun::create([
                 'name' => 'Backtest ' . now()->format('Y-m-d H:i:s'),
                 'strategy_name' => 'auction_market',
                 'start_date' => now()->subDays($years * 365),
                 'end_date' => now(),
-                'symbols' => $symbols ? explode(',', $symbols) : [],
+                'symbols' => $symbolsArray,
                 'parameters' => $params,
                 'status' => 'running',
                 'started_at' => now(),
