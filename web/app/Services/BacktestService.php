@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\BacktestRun;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class BacktestService
 {
@@ -62,12 +63,15 @@ class BacktestService
             // Create a pending run record first
             $symbolsArray = $symbols ? explode(',', $symbols) : [];
             
+            // Format symbols for PostgreSQL array
+            $symbolsFormatted = '{' . implode(',', array_map(fn($s) => '"' . trim($s) . '"', $symbolsArray)) . '}';
+            
             $run = BacktestRun::create([
                 'name' => 'Backtest ' . now()->format('Y-m-d H:i:s'),
                 'strategy_name' => 'auction_market',
                 'start_date' => now()->subDays($years * 365),
                 'end_date' => now(),
-                'symbols' => $symbolsArray,
+                'symbols' => DB::raw("'" . $symbolsFormatted . "'"),
                 'parameters' => $params,
                 'status' => 'running',
                 'started_at' => now(),
