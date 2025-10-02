@@ -18,7 +18,7 @@ from .trading.auto_strategy import run_auto_trading
 logger.remove()  # Remove default handler
 logger.add(
     sys.stderr,
-    format="<cyan>{extra[module]:12}</cyan> | {message}",
+    format="<cyan>{module:12}</cyan> | {message}",
     level="INFO"
 )
 
