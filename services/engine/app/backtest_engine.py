@@ -156,6 +156,19 @@ class BacktestEngine:
         # Create or use existing run record
         if run_id:
             logger.info(f"Using existing run ID: {run_id}")
+            # Update the dates in the existing run to match actual backtest dates
+            with self.config.get_connection().cursor() as cur:
+                cur.execute("""
+                    UPDATE backtest_runs 
+                    SET start_date = %s, end_date = %s, name = %s
+                    WHERE id = %s
+                """, (
+                    start_date,
+                    end_date,
+                    f"Backtest {start_date.date()} to {end_date.date()}",
+                    run_id
+                ))
+                self.config.get_connection().commit()
         else:
             run_id = self._create_run(symbols, start_date, end_date)
 
