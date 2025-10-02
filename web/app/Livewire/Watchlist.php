@@ -159,38 +159,54 @@ class Watchlist extends Component
                 ])->get('https://paper-api.alpaca.markets/v2/positions');
                 
                 if ($positionsResponse->successful()) {
-                    $positions = collect($positionsResponse->json())->map(function($pos) use ($apiKey, $secretKey) {
+                    $positionsData = $positionsResponse->json();
+                    
+                    // Fetch all open orders once (instead of per position)
+                    $allOrders = [];
+                    try {
+                        $allOrdersResponse = \Illuminate\Support\Facades\Http::withHeaders([
+                            'APCA-API-KEY-ID' => $apiKey,
+                            'APCA-API-SECRET-KEY' => $secretKey,
+                        ])->get('https://paper-api.alpaca.markets/v2/orders', [
+                            'status' => 'open'
+                        ]);
+                        
+                        if ($allOrdersResponse->successful()) {
+                            $allOrders = $allOrdersResponse->json();
+                        }
+                    } catch (\Exception $e) {
+                        // Silently fail
+                    }
+                    
+                    // Group orders by symbol for quick lookup
+                    $ordersBySymbol = [];
+                    foreach ($allOrders as $order) {
+                        $symbol = $order['symbol'];
+                        if (!isset($ordersBySymbol[$symbol])) {
+                            $ordersBySymbol[$symbol] = [];
+                        }
+                        $ordersBySymbol[$symbol][] = $order;
+                    }
+                    
+                    $positions = collect($positionsData)->map(function($pos) use ($ordersBySymbol) {
                         $entryPrice = (float)$pos['avg_entry_price'];
                         $currentPrice = (float)$pos['current_price'];
                         $qty = (int)$pos['qty'];
                         $unrealizedPl = (float)$pos['unrealized_pl'];
                         $unrealizedPlPct = (float)$pos['unrealized_plpc'] * 100;
                         
-                        // Get open orders for this symbol to find TP/SL
+                        // Find TP/SL from pre-fetched orders
                         $takeProfit = null;
                         $stopLoss = null;
                         
-                        try {
-                            $ordersResponse = \Illuminate\Support\Facades\Http::withHeaders([
-                                'APCA-API-KEY-ID' => $apiKey,
-                                'APCA-API-SECRET-KEY' => $secretKey,
-                            ])->get('https://paper-api.alpaca.markets/v2/orders', [
-                                'status' => 'open',
-                                'symbols' => $pos['symbol']
-                            ]);
-                            
-                            if ($ordersResponse->successful()) {
-                                $orders = $ordersResponse->json();
-                                foreach ($orders as $order) {
-                                    if ($order['type'] === 'limit' && isset($order['limit_price'])) {
-                                        $takeProfit = (float)$order['limit_price'];
-                                    } elseif ($order['type'] === 'stop' && isset($order['stop_price'])) {
-                                        $stopLoss = (float)$order['stop_price'];
-                                    }
+                        if (isset($ordersBySymbol[$pos['symbol']])) {
+                            foreach ($ordersBySymbol[$pos['symbol']] as $order) {
+                                if ($order['type'] === 'limit' && isset($order['limit_price'])) {
+                                    $takeProfit = (float)$order['limit_price'];
+                                } elseif ($order['type'] === 'stop' && isset($order['stop_price'])) {
+                                    $stopLoss = (float)$order['stop_price'];
                                 }
                             }
-                        } catch (\Exception $e) {
-                            // Silently fail
                         }
                         
                         return [
@@ -218,30 +234,42 @@ class Watchlist extends Component
                 ]);
                 
                 if ($ordersResponse->successful()) {
-                    $pendingOrders = collect($ordersResponse->json())->map(function($order) use ($apiKey, $secretKey) {
-                        // Try to get current price from latest trade
-                        $currentPrice = null;
+                    $orders = $ordersResponse->json();
+                    
+                    // Get unique symbols from pending orders
+                    $symbols = array_unique(array_column($orders, 'symbol'));
+                    
+                    // Batch fetch quotes for all symbols (much faster!)
+                    $quotes = [];
+                    if (!empty($symbols)) {
                         try {
-                            $quoteResponse = \Illuminate\Support\Facades\Http::withHeaders([
+                            $symbolsParam = implode(',', $symbols);
+                            $quotesResponse = \Illuminate\Support\Facades\Http::withHeaders([
                                 'APCA-API-KEY-ID' => $apiKey,
                                 'APCA-API-SECRET-KEY' => $secretKey,
-                            ])->get("https://data.alpaca.markets/v2/stocks/{$order['symbol']}/quotes/latest");
+                            ])->get("https://data.alpaca.markets/v2/stocks/quotes/latest", [
+                                'symbols' => $symbolsParam
+                            ]);
                             
-                            if ($quoteResponse->successful()) {
-                                $quote = $quoteResponse->json();
-                                $currentPrice = isset($quote['quote']['ap']) ? (float)$quote['quote']['ap'] : null;
+                            if ($quotesResponse->successful()) {
+                                $quotesData = $quotesResponse->json();
+                                foreach ($quotesData['quotes'] ?? [] as $symbol => $quote) {
+                                    $quotes[$symbol] = isset($quote['ap']) ? (float)$quote['ap'] : null;
+                                }
                             }
                         } catch (\Exception $e) {
                             // Silently fail
                         }
-                        
+                    }
+                    
+                    $pendingOrders = collect($orders)->map(function($order) use ($quotes) {
                         return [
                             'symbol' => $order['symbol'],
                             'side' => $order['side'],
                             'qty' => (int)$order['qty'],
                             'order_type' => $order['type'],
                             'limit_price' => isset($order['limit_price']) ? (float)$order['limit_price'] : null,
-                            'current_price' => $currentPrice,
+                            'current_price' => $quotes[$order['symbol']] ?? null,
                             'submitted_at' => $order['submitted_at'],
                             'status' => 'PENDING',
                         ];
