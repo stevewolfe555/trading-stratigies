@@ -385,10 +385,23 @@ class BacktestEngine:
             self.config.get_connection().commit()
 
     def _calculate_position_cost(self, signal: Dict, available_cash: float) -> float:
-        """Calculate cost of entering position."""
+        """
+        Calculate cost of entering position.
+        
+        Uses CURRENT ACCOUNT VALUE for position sizing (not initial capital).
+        This means position sizes grow/shrink with account performance.
+        """
         entry_price = signal['entry_price']
-        risk_amount = self.portfolio.initial_capital * (self.config.get_parameter('risk_per_trade_pct', 1.0) / 100)
         stop_loss = signal['stop_loss']
+        
+        # Calculate current account value (cash + positions value)
+        # For simplicity, use cash as proxy since positions are marked-to-market
+        current_equity = self.portfolio.cash + sum(
+            pos.quantity * pos.entry_price for pos in self.portfolio.positions.values()
+        )
+        
+        # Risk based on CURRENT equity (not initial capital)
+        risk_amount = current_equity * (self.config.get_parameter('risk_per_trade_pct', 1.0) / 100)
 
         # Calculate quantity based on risk
         stop_distance = abs(entry_price - stop_loss)
