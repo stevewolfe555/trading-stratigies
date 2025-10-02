@@ -42,19 +42,20 @@ def parse_arguments():
     parser.add_argument('--all-symbols', action='store_true', help='Test all available symbols')
 
     # Time period
-    parser.add_argument('--years', type=float, help='Number of years of historical data')
     parser.add_argument('--start-date', type=str, help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end-date', type=str, help='End date (YYYY-MM-DD)')
 
     # Test modes
     parser.add_argument('--individual', type=str, help='Run individual test for single symbol')
-    parser.add_argument('--unlimited', action='store_true', help='Run without position/cash limits')
+    parser.add_argument('--unlimited', action='store_true', help='Run unlimited mode (no position/capital limits)')
+    
+    # Run ID (for UI integration)
+    parser.add_argument('--run-id', type=int, help='Existing run ID to update (instead of creating new)')
 
     # Parameters
     parser.add_argument('--initial-capital', type=float, default=100000, help='Initial capital')
     parser.add_argument('--max-positions', type=int, default=3, help='Maximum positions')
     parser.add_argument('--risk-per-trade', type=float, default=1.0, help='Risk per trade (%)')
-
     # Output
     parser.add_argument('--export', type=str, help='Export results to JSON file')
 
@@ -85,7 +86,8 @@ def run_portfolio_backtest(symbols: List[str], start_date: datetime, end_date: d
     logging.info("🚀 Running portfolio backtest...")
     
     engine = BacktestEngine(parameters)
-    engine.run_backtest(symbols, start_date, end_date)
+    run_id = parameters.get('run_id')
+    engine.run_backtest(symbols, start_date, end_date, run_id=run_id)
     
     return engine.analyzer.generate_report()
 
@@ -161,7 +163,8 @@ def run_unlimited_backtest(symbols: List[str], start_date: datetime, end_date: d
     unlimited_params['test_mode'] = 'unlimited'
     
     engine = BacktestEngine(unlimited_params)
-    engine.run_backtest(symbols, start_date, end_date)
+    run_id = unlimited_params.get('run_id')
+    engine.run_backtest(symbols, start_date, end_date, run_id=run_id)
     
     return engine.analyzer.generate_report()
 
@@ -202,7 +205,8 @@ def main():
         'atr_target_multiplier': 3.0,
         'test_mode': 'unlimited' if args.unlimited else 'portfolio',
         'enable_position_limits': not args.unlimited,
-        'enable_cash_limits': not args.unlimited
+        'enable_cash_limits': not args.unlimited,
+        'run_id': args.run_id if hasattr(args, 'run_id') and args.run_id else None
     }
     
     # Log version info

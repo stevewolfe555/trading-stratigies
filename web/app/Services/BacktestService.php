@@ -77,11 +77,15 @@ class BacktestService
                 'started_at' => now(),
             ]);
 
-            // Run backtest in background using shell background execution
-            $backgroundCommand = $command . ' > /dev/null 2>&1 &';
-            exec($backgroundCommand);
+            // Run backtest in background using nohup
+            $scriptPath = base_path('../run_backtest.sh');
+            $commandWithRunId = $command . " --run-id {$run->id}";
+            file_put_contents($scriptPath, "#!/bin/bash\ncd " . base_path('..') . "\n" . $commandWithRunId . "\n");
+            chmod($scriptPath, 0755);
+            
+            exec("nohup {$scriptPath} > /dev/null 2>&1 &");
 
-            Log::info("Backtest started in background", ['run_id' => $run->id, 'command' => $command]);
+            Log::info("Backtest started in background", ['run_id' => $run->id, 'command' => $commandWithRunId]);
 
             return $run;
         } catch (\Exception $e) {

@@ -149,12 +149,15 @@ class BacktestEngine:
             logger.error(f"Error calculating ATR: {e}")
             return 0
 
-    def run_backtest(self, symbols: List[str], start_date: datetime, end_date: datetime):
+    def run_backtest(self, symbols: List[str], start_date: datetime, end_date: datetime, run_id: Optional[int] = None):
         """Run backtest with proper multi-stock simulation."""
         logger.info(f"🚀 Starting backtest: {start_date.date()} to {end_date.date()}")
 
-        # Create run record
-        run_id = self._create_run(symbols, start_date, end_date)
+        # Create or use existing run record
+        if run_id:
+            logger.info(f"Using existing run ID: {run_id}")
+        else:
+            run_id = self._create_run(symbols, start_date, end_date)
 
         # Load and merge candles
         all_bars_by_time = self.data_loader.load_and_merge_candles(symbols, start_date, end_date)
