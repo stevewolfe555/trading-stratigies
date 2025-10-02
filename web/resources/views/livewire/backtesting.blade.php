@@ -392,6 +392,13 @@
                 <div class="bg-white p-4 rounded-lg shadow">
                     <h3 class="text-sm font-semibold text-gray-700 mb-3">⚙️ Configuration</h3>
                     
+                    <!-- Date Range -->
+                    <div class="mb-3 p-2 bg-blue-50 rounded text-xs">
+                        <span class="text-gray-600">Period:</span>
+                        <span class="font-semibold">{{ $selectedRun->start_date->format('Y-m-d') }} to {{ $selectedRun->end_date->format('Y-m-d') }}</span>
+                        <span class="text-gray-500 ml-2">({{ $selectedRun->start_date->diffInDays($selectedRun->end_date) }} days)</span>
+                    </div>
+                    
                     <div class="grid grid-cols-2 gap-3 text-xs">
                         <div class="flex justify-between p-2 bg-gray-50 rounded">
                             <span class="text-gray-600">Initial Capital:</span>

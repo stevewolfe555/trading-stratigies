@@ -57,6 +57,12 @@ def parse_arguments():
     parser.add_argument('--initial-capital', type=float, default=100000, help='Initial capital')
     parser.add_argument('--max-positions', type=int, default=3, help='Maximum positions')
     parser.add_argument('--risk-per-trade', type=float, default=1.0, help='Risk per trade (%)')
+    
+    # Advanced strategy parameters
+    parser.add_argument('--min-aggression', type=int, default=70, help='Minimum aggression score (0-100)')
+    parser.add_argument('--atr-stop', type=float, default=1.5, help='ATR stop loss multiplier')
+    parser.add_argument('--atr-target', type=float, default=3.0, help='ATR take profit multiplier')
+    
     # Output
     parser.add_argument('--export', type=str, help='Export results to JSON file')
 
@@ -201,9 +207,9 @@ def main():
         'initial_capital': args.initial_capital,
         'max_positions': args.max_positions,
         'risk_per_trade_pct': args.risk_per_trade,
-        'min_aggression_score': 70,
-        'atr_stop_multiplier': 1.5,
-        'atr_target_multiplier': 3.0,
+        'min_aggression_score': args.min_aggression,
+        'atr_stop_multiplier': args.atr_stop,
+        'atr_target_multiplier': args.atr_target,
         'test_mode': 'unlimited' if args.unlimited else 'portfolio',
         'enable_position_limits': not args.unlimited,
         'enable_cash_limits': not args.unlimited,
