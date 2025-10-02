@@ -46,10 +46,12 @@ class Backtesting extends Component
         // Load available symbols
         $this->availableSymbols = Symbol::orderBy('symbol')
             ->pluck('symbol')
-            ->toArray();
+            ->toArray() ?? [];
         
         // Default to first 5 symbols
-        $this->selectedSymbols = array_slice($this->availableSymbols, 0, 5);
+        if (!empty($this->availableSymbols)) {
+            $this->selectedSymbols = array_slice($this->availableSymbols, 0, 5);
+        }
     }
     
     public function toggleRunForm(): void
