@@ -26,15 +26,23 @@ class BacktestService
         $atrStop = $params['atr_stop_multiplier'] ?? 1.5;
         $atrTarget = $params['atr_target_multiplier'] ?? 3.0;
         $maxDailyLoss = $params['max_daily_loss_pct'] ?? 3.0;
-        $allowBalanceTrades = $params['allow_balance_trades'] ?? false;
+        $allowBalanceTrades = ($params['allow_balance_trades'] ?? false) === true;
 
         // Test modes
         $testMode = $params['test_mode'] ?? 'portfolio'; // 'portfolio', 'individual', 'unlimited'
         $individualSymbol = $params['individual_symbol'] ?? null;
         $unlimitedMode = $params['unlimited_mode'] ?? false;
+        
+        // Log parameters for debugging
+        Log::info("Backtest parameters", [
+            'allow_balance_trades' => $allowBalanceTrades,
+            'min_aggression' => $minAggression,
+        ]);
 
         // Build command based on test mode
         $balanceFlag = $allowBalanceTrades ? ' --allow-balance-trades' : '';
+        
+        Log::info("Balance flag", ['flag' => $balanceFlag, 'allow' => $allowBalanceTrades]);
         
         if ($testMode === 'individual' && $individualSymbol) {
             $command = sprintf(
