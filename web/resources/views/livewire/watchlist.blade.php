@@ -188,7 +188,7 @@
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             @foreach($openPositions as $trade)
-            <a href="{{ route('stock-detail', ['symbol' => $trade['symbol']]) }}" class="block border-l-4 {{ $trade['type'] === 'BUY' ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50' }} p-3 rounded hover:shadow-md hover:border-blue-400 transition-all cursor-pointer">
+            <a href="{{ route('stock.detail', ['symbol' => $trade['symbol']]) }}" class="block border-l-4 {{ $trade['type'] === 'BUY' ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50' }} p-3 rounded hover:shadow-md hover:border-blue-400 transition-all cursor-pointer">
                 <div class="flex items-center justify-between mb-2">
                     <div>
                         <span class="font-bold text-lg {{ $trade['type'] === 'BUY' ? 'text-green-700' : 'text-red-700' }}">
