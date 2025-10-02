@@ -13,35 +13,68 @@ class BacktestService
      */
     public function runBacktest(array $params): ?BacktestRun
     {
-        $symbols = implode(',', $params['symbols']);
+        // Extract parameters
+        $symbols = implode(',', $params['symbols'] ?? []);
         $years = $params['years'] ?? 1;
-        
-        // Build command
-        $command = sprintf(
-            'docker compose exec -T engine python3 backtest.py --symbols %s --years %s',
-            escapeshellarg($symbols),
-            escapeshellarg($years)
-        );
-        
+        $initialCapital = $params['initial_capital'] ?? 100000;
+        $riskPerTrade = $params['risk_per_trade_pct'] ?? 1.0;
+        $maxPositions = $params['max_positions'] ?? 3;
+
+        // Test modes
+        $testMode = $params['test_mode'] ?? 'portfolio'; // 'portfolio', 'individual', 'unlimited'
+        $individualSymbol = $params['individual_symbol'] ?? null;
+        $unlimitedMode = $params['unlimited_mode'] ?? false;
+
+        // Build command based on test mode
+        if ($testMode === 'individual' && $individualSymbol) {
+            $command = sprintf(
+                'docker compose exec -T engine python3 backtest.py --individual %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s',
+                escapeshellarg($individualSymbol),
+                escapeshellarg($years),
+                escapeshellarg($initialCapital),
+                escapeshellarg($riskPerTrade),
+                escapeshellarg($maxPositions)
+            );
+        } elseif ($unlimitedMode || $testMode === 'unlimited') {
+            $command = sprintf(
+                'docker compose exec -T engine python3 backtest.py --symbols %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s --unlimited',
+                escapeshellarg($symbols),
+                escapeshellarg($years),
+                escapeshellarg($initialCapital),
+                escapeshellarg($riskPerTrade),
+                escapeshellarg($maxPositions)
+            );
+        } else {
+            // Portfolio mode (default)
+            $command = sprintf(
+                'docker compose exec -T engine python3 backtest.py --symbols %s --years %s --initial-capital %s --risk-per-trade %s --max-positions %s',
+                escapeshellarg($symbols),
+                escapeshellarg($years),
+                escapeshellarg($initialCapital),
+                escapeshellarg($riskPerTrade),
+                escapeshellarg($maxPositions)
+            );
+        }
+
         Log::info("Running backtest: {$command}");
-        
+
         try {
             // Run backtest in background
             $result = Process::path(base_path('..'))->run($command);
-            
+
             if ($result->successful()) {
                 // Get the latest backtest run
                 $run = BacktestRun::latest('id')->first();
-                
+
                 Log::info("Backtest completed successfully", ['run_id' => $run?->id]);
-                
+
                 return $run;
             } else {
                 Log::error("Backtest failed", [
                     'output' => $result->output(),
                     'error' => $result->errorOutput()
                 ]);
-                
+
                 return null;
             }
         } catch (\Exception $e) {
@@ -110,25 +143,41 @@ class BacktestService
     }
     
     /**
-     * Compare multiple backtest runs
+     * Get constraint analysis for a backtest run
      */
-    public function compareRuns(array $runIds): array
+    public function getConstraintAnalysis(BacktestRun $run): array
     {
-        $runs = BacktestRun::whereIn('id', $runIds)
-            ->orderBy('total_pnl_pct', 'desc')
-            ->get();
-        
-        return $runs->map(function($run) {
-            return [
-                'id' => $run->id,
-                'name' => $run->name,
-                'symbols' => $run->symbols,
-                'win_rate' => $run->win_rate,
-                'total_pnl_pct' => $run->total_pnl_pct,
-                'sharpe_ratio' => $run->sharpe_ratio,
-                'max_drawdown' => $run->max_drawdown_pct,
-                'total_trades' => $run->total_trades,
-            ];
-        })->toArray();
+        // This would need to be stored in the database during backtest execution
+        // For now, return a placeholder structure
+        return [
+            'signals_generated' => 0, // Would come from backtest engine logs
+            'signals_blocked' => 0,  // Would come from backtest engine logs
+            'blocked_percentage' => 0,
+            'position_limit_hit' => 0,
+            'capital_limit_hit' => 0,
+            'recommendations' => [
+                'max_positions_needed' => null,
+                'capital_needed' => null,
+            ]
+        ];
+    }
+
+    /**
+     * Get detailed backtest information including constraints
+     */
+    public function getDetailedResults(BacktestRun $run): array
+    {
+        $summary = $this->getResultsSummary($run);
+        $constraints = $this->getConstraintAnalysis($run);
+
+        return array_merge($summary, [
+            'constraint_analysis' => $constraints,
+            'parameters' => json_decode($run->parameters, true) ?? [],
+            'version_info' => [
+                'engine_version' => '1.0.0',
+                'strategy_version' => '1.0.0',
+                'config_version' => '1.0.0'
+            ]
+        ]);
     }
 }

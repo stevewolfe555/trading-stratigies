@@ -96,11 +96,104 @@
                     >
                     @error('maxPositions') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
                 </div>
+            <!-- Test Mode Selection -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Test Mode</label>
+                <div class="grid grid-cols-3 gap-2">
+                    <label class="flex items-center space-x-2 cursor-pointer">
+                        <input
+                            type="radio"
+                            wire:model="testMode"
+                            value="portfolio"
+                            class="text-blue-600"
+                        >
+                        <span class="text-sm">Portfolio</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer">
+                        <input
+                            type="radio"
+                            wire:model="testMode"
+                            value="individual"
+                            class="text-blue-600"
+                        >
+                        <span class="text-sm">Individual</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer">
+                        <input
+                            type="radio"
+                            wire:model="testMode"
+                            value="unlimited"
+                            class="text-blue-600"
+                        >
+                        <span class="text-sm">Unlimited</span>
+                    </label>
+                </div>
+                @error('testMode') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
+            </div>
+
+            <!-- Individual Symbol Selection (shown when individual mode selected) -->
+            @if($testMode === 'individual')
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Individual Symbol</label>
+                <select wire:model="individualSymbol" class="w-full border-gray-300 rounded-md text-sm">
+                    <option value="">Select a symbol...</option>
+                    @foreach($availableSymbols as $symbol)
+                    <option value="{{ $symbol }}">{{ $symbol }}</option>
+                    @endforeach
+                </select>
+                @error('individualSymbol') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
+            </div>
+            @endif
+
+            <!-- Advanced Parameters (hidden when unlimited mode) -->
+            @if(!$unlimitedMode)
+            <div class="bg-gray-50 p-4 rounded-lg">
+                <h4 class="text-sm font-semibold text-gray-700 mb-3">Advanced Parameters</h4>
+
+                <div class="grid grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Min Aggression Score</label>
+                        <input
+                            type="number"
+                            wire:model="minAggressionScore"
+                            min="1"
+                            max="100"
+                            class="w-full border-gray-300 rounded-md text-sm"
+                        >
+                        @error('minAggressionScore') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ATR Stop Multiplier</label>
+                        <input
+                            type="number"
+                            wire:model="atrStopMultiplier"
+                            step="0.1"
+                            min="0.5"
+                            max="5"
+                            class="w-full border-gray-300 rounded-md text-sm"
+                        >
+                        @error('atrStopMultiplier') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ATR Target Multiplier</label>
+                        <input
+                            type="number"
+                            wire:model="atrTargetMultiplier"
+                            step="0.1"
+                            min="1"
+                            max="10"
+                            class="w-full border-gray-300 rounded-md text-sm"
+                        >
+                        @error('atrTargetMultiplier') <span class="text-red-600 text-xs">{{ $message }}</span> @enderror
+                    </div>
+                </div>
             </div>
 
             <!-- Submit -->
             <div class="flex justify-end">
-                <button 
+                <button
                     type="submit"
                     class="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 font-semibold"
                 >
@@ -238,10 +331,56 @@
                     </div>
                 </div>
 
+                <!-- Constraint Analysis -->
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <h3 class="text-sm font-semibold text-gray-700 mb-3">🔍 Constraint Analysis</h3>
+
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div class="p-3 bg-yellow-50 rounded-lg">
+                            <div class="font-semibold text-gray-900">Signal Generation</div>
+                            <div class="mt-2 space-y-1">
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">Signals Generated:</span>
+                                    <span class="font-medium">{{ $selectedRun->constraint_analysis['signals_generated'] ?? 0 }}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">Signals Blocked:</span>
+                                    <span class="font-medium text-orange-600">{{ $selectedRun->constraint_analysis['signals_blocked'] ?? 0 }}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">Blocked %:</span>
+                                    <span class="font-medium">{{ number_format(($selectedRun->constraint_analysis['blocked_percentage'] ?? 0), 1) }}%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="p-3 bg-blue-50 rounded-lg">
+                            <div class="font-semibold text-gray-900">Recommendations</div>
+                            <div class="mt-2 space-y-1">
+                                @if(isset($selectedRun->constraint_analysis['recommendations']['max_positions_needed']))
+                                <div class="text-xs text-gray-600">
+                                    Max Positions Needed: {{ $selectedRun->constraint_analysis['recommendations']['max_positions_needed'] }}
+                                </div>
+                                @endif
+                                @if(isset($selectedRun->constraint_analysis['recommendations']['capital_needed']))
+                                <div class="text-xs text-gray-600">
+                                    Capital Needed: ${{ number_format($selectedRun->constraint_analysis['recommendations']['capital_needed'], 0) }}
+                                </div>
+                                @endif
+                                @if(($selectedRun->constraint_analysis['signals_blocked'] ?? 0) > 0)
+                                <div class="text-xs text-orange-600 mt-2">
+                                    💡 Consider increasing position limits or capital to capture more signals
+                                </div>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Equity Curve Chart -->
                 <div class="bg-white p-4 rounded-lg shadow">
                     <h3 class="text-sm font-semibold text-gray-700 mb-3">Equity Curve</h3>
-                    <div id="equity-chart" style="height: 300px;"></div>
+                    <div id="equity-chart" wire:ignore style="height: 300px;"></div>
                 </div>
 
                 <!-- Trade List -->
@@ -296,14 +435,20 @@
 <script>
 let equityChart = null;
 
-$wire.on('equity-curve-data', (event) => {
-    const { labels, equity } = event;
-    
+function initChart(equityCurve) {
+    if (!equityCurve) return;
+
+    const container = document.getElementById('equity-chart');
+
+    if (!container) {
+        console.error('Chart container not found');
+        return;
+    }
+
     if (equityChart) {
         equityChart.remove();
     }
-    
-    const container = document.getElementById('equity-chart');
+
     equityChart = LightweightCharts.createChart(container, {
         width: container.clientWidth,
         height: 300,
@@ -316,19 +461,35 @@ $wire.on('equity-curve-data', (event) => {
             horzLines: { color: '#f0f0f0' },
         },
     });
-    
+
     const lineSeries = equityChart.addLineSeries({
         color: '#2563eb',
         lineWidth: 2,
     });
-    
-    const data = labels.map((label, i) => ({
+
+    const data = equityCurve.labels.map((label, i) => ({
         time: label,
-        value: equity[i]
+        value: equityCurve.equity[i]
     }));
-    
+
     lineSeries.setData(data);
     equityChart.timeScale().fitContent();
+}
+
+// Initialize chart after Livewire updates
+Livewire.hook('morph.updated', ({ component }) => {
+    const equityCurve = @json($equityCurve ?? null);
+    if (equityCurve) {
+        setTimeout(() => initChart(equityCurve), 100);
+    }
+});
+
+// Initialize chart on first load
+document.addEventListener('DOMContentLoaded', () => {
+    const equityCurve = @json($equityCurve ?? null);
+    if (equityCurve) {
+        setTimeout(() => initChart(equityCurve), 100);
+    }
 });
 </script>
 @endscript

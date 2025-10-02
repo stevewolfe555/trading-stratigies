@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     avg_trade_duration_minutes INTEGER,
     avg_bars_in_trade INTEGER,
     
+    -- Constraint analysis (NEW)
+    signals_generated INTEGER DEFAULT 0,
+    signals_blocked INTEGER DEFAULT 0,
+    blocked_percentage DECIMAL(5,2),
+    position_limit_hit INTEGER DEFAULT 0,
+    capital_limit_hit INTEGER DEFAULT 0,
+    constraint_analysis JSONB, -- Detailed constraint analysis data
+    
     -- Status
     status VARCHAR(50) DEFAULT 'pending', -- pending, running, completed, failed
     error_message TEXT,

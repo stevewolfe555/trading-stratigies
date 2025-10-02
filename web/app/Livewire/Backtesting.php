@@ -20,6 +20,14 @@ class Backtesting extends Component
     public $initialCapital = 100000;
     public $riskPerTrade = 1.0;
     public $maxPositions = 3;
+
+    // New advanced parameters
+    public $testMode = 'portfolio'; // 'portfolio', 'individual', 'unlimited'
+    public $individualSymbol = '';
+    public $unlimitedMode = false;
+    public $minAggressionScore = 70;
+    public $atrStopMultiplier = 1.5;
+    public $atrTargetMultiplier = 3.0;
     
     // State
     public bool $showRunForm = false;
@@ -33,6 +41,10 @@ class Backtesting extends Component
             'initialCapital' => 'float',
             'riskPerTrade' => 'float',
             'maxPositions' => 'integer',
+            'minAggressionScore' => 'integer',
+            'atrStopMultiplier' => 'float',
+            'atrTargetMultiplier' => 'float',
+            'unlimitedMode' => 'boolean',
         ];
     }
     
@@ -61,30 +73,66 @@ class Backtesting extends Component
     
     public function runBacktest(): void
     {
-        $this->validate([
-            'selectedSymbols' => 'required|array|min:1',
-            'years' => 'required',
-            'initialCapital' => 'required',
-            'riskPerTrade' => 'required',
-            'maxPositions' => 'required',
-        ]);
-        
+        // Dynamic validation based on test mode
+        $rules = [
+            'years' => 'required|numeric|min:0.01|max:10',
+            'initialCapital' => 'required|numeric|min:1000',
+            'riskPerTrade' => 'required|numeric|min:0.1|max:10',
+            'maxPositions' => 'required|integer|min:1|max:10',
+        ];
+
+        // Add mode-specific validation
+        if ($this->testMode === 'individual') {
+            $rules['individualSymbol'] = 'required|string';
+        } else {
+            $rules['selectedSymbols'] = 'required|array|min:1';
+        }
+
+        // Add advanced parameter validation
+        if (!$this->unlimitedMode) {
+            $rules['minAggressionScore'] = 'required|integer|min:1|max:100';
+            $rules['atrStopMultiplier'] = 'required|numeric|min:0.5|max:5';
+            $rules['atrTargetMultiplier'] = 'required|numeric|min:1|max:10';
+        }
+
+        $this->validate($rules);
+
         // Convert to proper types
         $this->years = (float) $this->years;
         $this->initialCapital = (float) $this->initialCapital;
         $this->riskPerTrade = (float) $this->riskPerTrade;
         $this->maxPositions = (int) $this->maxPositions;
-        
+        $this->minAggressionScore = (int) $this->minAggressionScore;
+        $this->atrStopMultiplier = (float) $this->atrStopMultiplier;
+        $this->atrTargetMultiplier = (float) $this->atrTargetMultiplier;
+
+        // Build parameters array
         $params = [
-            'symbols' => $this->selectedSymbols,
+            'symbols' => $this->testMode === 'individual' ? [$this->individualSymbol] : $this->selectedSymbols,
             'years' => $this->years,
             'initial_capital' => $this->initialCapital,
             'risk_per_trade_pct' => $this->riskPerTrade,
             'max_positions' => $this->maxPositions,
+            'test_mode' => $this->testMode,
+            'unlimited_mode' => $this->unlimitedMode,
         ];
-        
+
+        // Add advanced parameters if not unlimited
+        if (!$this->unlimitedMode) {
+            $params = array_merge($params, [
+                'min_aggression_score' => $this->minAggressionScore,
+                'atr_stop_multiplier' => $this->atrStopMultiplier,
+                'atr_target_multiplier' => $this->atrTargetMultiplier,
+            ]);
+        }
+
+        // Set individual symbol for individual mode
+        if ($this->testMode === 'individual') {
+            $params['individual_symbol'] = $this->individualSymbol;
+        }
+
         $run = $this->backtestService->runBacktest($params);
-        
+
         if ($run) {
             $this->selectedRunId = $run->id;
             $this->showRunForm = false;
@@ -126,12 +174,6 @@ class Backtesting extends Component
             if ($selectedRun) {
                 $trades = $this->backtestService->getTrades($selectedRun, 20);
                 $equityCurve = $this->backtestService->getEquityCurve($selectedRun);
-                
-                // Dispatch equity curve data to JavaScript
-                $this->dispatch('equity-curve-data', 
-                    labels: $equityCurve['labels'],
-                    equity: $equityCurve['equity']
-                );
             }
         }
         

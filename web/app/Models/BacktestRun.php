@@ -36,6 +36,13 @@ class BacktestRun extends Model
         'started_at',
         'completed_at',
         'duration_seconds',
+        // Constraint analysis fields
+        'signals_generated',
+        'signals_blocked',
+        'blocked_percentage',
+        'position_limit_hit',
+        'capital_limit_hit',
+        'constraint_analysis',
     ];
     
     protected $casts = [
@@ -56,6 +63,13 @@ class BacktestRun extends Model
         'profit_factor' => 'decimal:4',
         'started_at' => 'datetime',
         'completed_at' => 'datetime',
+        // Constraint analysis casts
+        'signals_generated' => 'integer',
+        'signals_blocked' => 'integer',
+        'blocked_percentage' => 'decimal:2',
+        'position_limit_hit' => 'integer',
+        'capital_limit_hit' => 'integer',
+        'constraint_analysis' => 'array',
     ];
     
     public function trades(): HasMany
