@@ -31,9 +31,14 @@ class PolymarketWebSocketProvider:
     """
     Polymarket CLOB WebSocket provider for real-time binary option prices.
 
-    Connection: wss://clob.polymarket.com/ws/market
-    Authentication: Bearer token (API key)
-    Message format: JSON order book updates
+    Connection: wss://ws-subscriptions-clob.polymarket.com/ws/market
+    Authentication: None required for public market data
+    Message format: JSON with "book", "price_change", "last_trade_price" events
+
+    API Documentation:
+    - Market Channel: wss://ws-subscriptions-clob.polymarket.com/ws/market
+    - Subscription: {"assets_ids": ["token_id"], "type": "market"}
+    - Events: book (orderbook), price_change (bid/ask), last_trade_price
 
     Speed optimizations:
     - Symbol ID caching (avoid repeated DB lookups)
@@ -42,25 +47,29 @@ class PolymarketWebSocketProvider:
     - Non-blocking Redis publish
     """
 
-    def __init__(self, api_key: str, db_conn, config: Dict = None):
+    def __init__(self, db_conn, config: Dict = None):
         """
         Initialize Polymarket WebSocket provider.
 
         Args:
-            api_key: Polymarket API key for authentication
             db_conn: PostgreSQL database connection
             config: Optional configuration dict
+
+        Note: No API key required for public market data
         """
-        self.api_key = api_key
         self.conn = db_conn
         self.ws = None
-        self.subscribed_markets: Set[str] = set()
+        self.subscribed_assets: Set[str] = set()  # Track subscribed token IDs
 
         # Configuration
         self.config = config or {}
-        self.ws_url = self.config.get('ws_url', 'wss://clob.polymarket.com/ws/market')
+        self.ws_url = self.config.get('ws_url', 'wss://ws-subscriptions-clob.polymarket.com/ws/market')
         self.spread_threshold = Decimal(self.config.get('spread_threshold', '0.98'))
-        self.fee_rate = Decimal(self.config.get('fee_rate', '0.02'))  # Estimate 2% fees
+
+        # Fee structure (2026): Most markets are fee-free!
+        # Only 15-minute crypto markets have taker fees (~3% at 50% odds)
+        # For arbitrage on political/sports markets: ZERO FEES!
+        self.fee_rate = Decimal(self.config.get('fee_rate', '0.00'))  # Fee-free for most markets!
 
         # Performance optimization: cache symbol IDs
         self.symbol_cache: Dict[str, int] = {}
@@ -76,22 +85,17 @@ class PolymarketWebSocketProvider:
         """
         Connect to Polymarket WebSocket.
 
+        No authentication required for public market data.
+
         Returns:
             True if connected successfully
         """
         try:
             logger.info(f"Connecting to Polymarket WebSocket: {self.ws_url}")
 
-            # TODO: Research exact authentication method
-            # This is a placeholder - actual implementation depends on Polymarket API docs
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "User-Agent": "TradingPlatform/1.0"
-            }
-
+            # No auth headers needed for public market data
             self.ws = await websockets.connect(
                 self.ws_url,
-                extra_headers=headers,
                 ping_interval=20,
                 ping_timeout=10
             )
@@ -107,12 +111,15 @@ class PolymarketWebSocketProvider:
             self.is_connected = False
             return False
 
-    async def subscribe_market(self, market_id: str) -> bool:
+    async def subscribe_assets(self, asset_ids: list[str]) -> bool:
         """
-        Subscribe to order book updates for a specific market.
+        Subscribe to order book updates for multiple assets.
+
+        Each binary market has TWO assets (YES and NO tokens).
+        Subscribe to both to get complete orderbook data.
 
         Args:
-            market_id: Polymarket market ID (e.g., "0x1234abcd...")
+            asset_ids: List of Polymarket token IDs (e.g., ["123", "456"])
 
         Returns:
             True if subscribed successfully
@@ -122,29 +129,28 @@ class PolymarketWebSocketProvider:
             return False
 
         try:
-            # TODO: Verify exact message format from Polymarket docs
+            # Real Polymarket WebSocket subscription format
             subscribe_msg = {
-                "type": "subscribe",
-                "channel": "orderbook",
-                "market_id": market_id
+                "assets_ids": asset_ids,
+                "type": "market"
             }
 
             await self.ws.send(json.dumps(subscribe_msg))
-            self.subscribed_markets.add(market_id)
+            self.subscribed_assets.update(asset_ids)
 
-            logger.info(f"Subscribed to market: {market_id}")
+            logger.info(f"Subscribed to {len(asset_ids)} assets")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to subscribe to market {market_id}: {e}")
+            logger.error(f"Failed to subscribe to assets: {e}")
             return False
 
-    async def unsubscribe_market(self, market_id: str) -> bool:
+    async def unsubscribe_assets(self, asset_ids: list[str]) -> bool:
         """
-        Unsubscribe from market updates.
+        Unsubscribe from asset updates.
 
         Args:
-            market_id: Polymarket market ID
+            asset_ids: List of Polymarket token IDs
 
         Returns:
             True if unsubscribed successfully
@@ -153,20 +159,21 @@ class PolymarketWebSocketProvider:
             return False
 
         try:
+            # Note: Unsubscribe format may differ - need to verify
             unsubscribe_msg = {
-                "type": "unsubscribe",
-                "channel": "orderbook",
-                "market_id": market_id
+                "assets_ids": asset_ids,
+                "type": "unsubscribe"
             }
 
             await self.ws.send(json.dumps(unsubscribe_msg))
-            self.subscribed_markets.discard(market_id)
+            for asset_id in asset_ids:
+                self.subscribed_assets.discard(asset_id)
 
-            logger.info(f"Unsubscribed from market: {market_id}")
+            logger.info(f"Unsubscribed from {len(asset_ids)} assets")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to unsubscribe from market {market_id}: {e}")
+            logger.error(f"Failed to unsubscribe from assets: {e}")
             return False
 
     async def process_message(self, message: Dict):
@@ -175,20 +182,26 @@ class PolymarketWebSocketProvider:
 
         Speed critical: Target <10ms processing time
 
+        Polymarket sends three event types:
+        - "book": Full orderbook snapshot (bids/asks for YES and NO)
+        - "price_change": Best bid/ask updates
+        - "last_trade_price": Recent trade data
+
         Args:
             message: Parsed JSON message from WebSocket
         """
         try:
-            msg_type = message.get('type')
+            event_type = message.get('event_type')
 
-            if msg_type == 'orderbook_update':
-                await self._process_orderbook_update(message)
-            elif msg_type == 'error':
-                logger.error(f"Polymarket error: {message.get('error')}")
-            elif msg_type == 'subscribed':
-                logger.debug(f"Subscription confirmed: {message.get('market_id')}")
+            if event_type == 'book':
+                await self._process_book_event(message)
+            elif event_type == 'price_change':
+                await self._process_price_change(message)
+            elif event_type == 'last_trade_price':
+                # Trade data - can be used for volume analysis later
+                logger.debug(f"Trade: {message}")
             else:
-                logger.debug(f"Unknown message type: {msg_type}")
+                logger.debug(f"Unknown event type: {event_type}")
 
         except Exception as e:
             logger.error(f"Error processing message: {e}")
