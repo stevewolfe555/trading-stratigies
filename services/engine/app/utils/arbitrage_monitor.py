@@ -119,6 +119,14 @@ class ArbitrageMonitor:
         self.paper_pnl = Decimal('0')
         self.start_time = datetime.now()
 
+        # Price tracking for YES/NO tokens
+        # Maps token_id -> {price, volume, timestamp, market_id, outcome}
+        self.token_prices = {}
+
+        # Token-to-market mapping cache
+        # Maps token_id -> {symbol_id, market_id, outcome: 'YES'/'NO'}
+        self.token_market_map = {}
+
         logger.info(
             f"Arbitrage monitor initialized | "
             f"Mode: {mode} | "
@@ -126,6 +134,257 @@ class ArbitrageMonitor:
             f"Spread threshold: ${spread_threshold} | "
             f"Min profit: {min_profit_pct * 100:.2f}%"
         )
+
+    def _build_token_market_map(self):
+        """
+        Build mapping from token IDs to markets.
+
+        Queries database for all active markets and creates bidirectional
+        mapping: token_id -> {symbol_id, market_id, outcome}
+        """
+        try:
+            cur = self.conn.cursor()
+            cur.execute("""
+                SELECT
+                    bm.yes_token_id,
+                    bm.no_token_id,
+                    bm.market_id,
+                    s.id as symbol_id
+                FROM binary_markets bm
+                JOIN symbols s ON bm.symbol_id = s.id
+                WHERE bm.status = 'active'
+                    AND bm.end_date > NOW()
+                    AND bm.yes_token_id IS NOT NULL
+                    AND bm.no_token_id IS NOT NULL
+            """)
+
+            for row in cur.fetchall():
+                yes_token_id, no_token_id, market_id, symbol_id = row
+
+                self.token_market_map[yes_token_id] = {
+                    'symbol_id': symbol_id,
+                    'market_id': market_id,
+                    'outcome': 'YES'
+                }
+                self.token_market_map[no_token_id] = {
+                    'symbol_id': symbol_id,
+                    'market_id': market_id,
+                    'outcome': 'NO'
+                }
+
+            logger.info(f"Built token-market mapping for {len(self.token_market_map)} tokens")
+
+        except Exception as e:
+            logger.error(f"Failed to build token-market map: {e}")
+
+    async def _process_ws_message(self, message: Dict):
+        """
+        Process WebSocket message and insert price data.
+
+        Handles Polymarket WebSocket events:
+        - "book": Full orderbook snapshot
+        - "price_change": Best bid/ask update
+        - "last_trade_price": Trade data (ignored for now)
+
+        Args:
+            message: Parsed JSON message from WebSocket
+        """
+        try:
+            event_type = message.get('event_type')
+
+            if event_type == 'book':
+                await self._process_book_event(message)
+            elif event_type == 'price_change':
+                await self._process_price_change_event(message)
+            elif event_type == 'last_trade_price':
+                # Trade data - can be used for volume analysis later
+                pass
+
+        except Exception as e:
+            logger.error(f"Error processing WebSocket message: {e}")
+
+    async def _process_book_event(self, message: Dict):
+        """
+        Process "book" event - full orderbook snapshot.
+
+        Format:
+        {
+            "event_type": "book",
+            "asset_id": "token_id",
+            "timestamp": "2026-01-10T...",
+            "bids": [[price, size], ...],
+            "asks": [[price, size], ...]
+        }
+        """
+        asset_id = message.get('asset_id')
+        if not asset_id or asset_id not in self.token_market_map:
+            return
+
+        timestamp_str = message.get('timestamp')
+        bids = message.get('bids', [])
+        asks = message.get('asks', [])
+
+        if not bids or not asks:
+            return
+
+        # Parse prices
+        best_bid = Decimal(str(bids[0][0]))
+        best_ask = Decimal(str(asks[0][0]))
+        volume = int(asks[0][1])  # Volume at best ask
+
+        # Update token price cache
+        self.token_prices[asset_id] = {
+            'bid': best_bid,
+            'ask': best_ask,
+            'mid': (best_bid + best_ask) / 2,
+            'volume': volume,
+            'timestamp': timestamp_str,
+            'market_info': self.token_market_map[asset_id]
+        }
+
+        # Try to insert price data (if we have both YES and NO)
+        await self._try_insert_price_data(asset_id)
+
+    async def _process_price_change_event(self, message: Dict):
+        """
+        Process "price_change" event - best bid/ask update.
+
+        Format:
+        {
+            "event_type": "price_change",
+            "asset_id": "token_id",
+            "timestamp": "2026-01-10T...",
+            "best_bid": 0.52,
+            "best_ask": 0.53
+        }
+        """
+        asset_id = message.get('asset_id')
+        if not asset_id or asset_id not in self.token_market_map:
+            return
+
+        timestamp_str = message.get('timestamp')
+        best_bid = message.get('best_bid')
+        best_ask = message.get('best_ask')
+
+        if best_bid is None or best_ask is None:
+            return
+
+        # Update token price cache
+        self.token_prices[asset_id] = {
+            'bid': Decimal(str(best_bid)),
+            'ask': Decimal(str(best_ask)),
+            'mid': (Decimal(str(best_bid)) + Decimal(str(best_ask))) / 2,
+            'volume': 0,  # Volume not provided in price_change events
+            'timestamp': timestamp_str,
+            'market_info': self.token_market_map[asset_id]
+        }
+
+        # Try to insert price data (if we have both YES and NO)
+        await self._try_insert_price_data(asset_id)
+
+    async def _try_insert_price_data(self, trigger_token_id: str):
+        """
+        Attempt to insert price data for a market if we have both YES and NO prices.
+
+        Args:
+            trigger_token_id: Token ID that just received an update
+        """
+        # Get market info for this token
+        market_info = self.token_market_map.get(trigger_token_id)
+        if not market_info:
+            return
+
+        symbol_id = market_info['symbol_id']
+        market_id = market_info['market_id']
+
+        # Find both YES and NO tokens for this market
+        yes_token_id = None
+        no_token_id = None
+
+        for token_id, info in self.token_market_map.items():
+            if info['market_id'] == market_id:
+                if info['outcome'] == 'YES':
+                    yes_token_id = token_id
+                elif info['outcome'] == 'NO':
+                    no_token_id = token_id
+
+        if not yes_token_id or not no_token_id:
+            return
+
+        # Check if we have prices for both
+        yes_price = self.token_prices.get(yes_token_id)
+        no_price = self.token_prices.get(no_token_id)
+
+        if not yes_price or not no_price:
+            return  # Don't have both prices yet
+
+        # Use the most recent timestamp
+        timestamp_str = max(yes_price['timestamp'], no_price['timestamp'])
+        timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+
+        # Calculate spread and arbitrage opportunity
+        yes_ask = yes_price['ask']
+        no_ask = no_price['ask']
+        spread = yes_ask + no_ask
+
+        is_arbitrage = spread < self.spread_threshold
+
+        # Calculate estimated profit percentage
+        if spread > 0:
+            gross_profit = Decimal('1.00') - spread
+            # Zero fees for political/sports markets!
+            fees = Decimal('0')
+            net_profit = gross_profit - fees
+            estimated_profit_pct = (net_profit / spread) * 100
+        else:
+            estimated_profit_pct = Decimal('0')
+
+        # Insert into database
+        try:
+            cur = self.conn.cursor()
+            cur.execute("""
+                INSERT INTO binary_prices (
+                    timestamp, symbol_id,
+                    yes_bid, yes_ask, yes_mid, yes_volume,
+                    no_bid, no_ask, no_mid, no_volume,
+                    spread, arbitrage_opportunity, estimated_profit_pct
+                ) VALUES (
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+                ON CONFLICT (timestamp, symbol_id) DO UPDATE SET
+                    yes_bid = EXCLUDED.yes_bid,
+                    yes_ask = EXCLUDED.yes_ask,
+                    yes_mid = EXCLUDED.yes_mid,
+                    yes_volume = EXCLUDED.yes_volume,
+                    no_bid = EXCLUDED.no_bid,
+                    no_ask = EXCLUDED.no_ask,
+                    no_mid = EXCLUDED.no_mid,
+                    no_volume = EXCLUDED.no_volume,
+                    spread = EXCLUDED.spread,
+                    arbitrage_opportunity = EXCLUDED.arbitrage_opportunity,
+                    estimated_profit_pct = EXCLUDED.estimated_profit_pct
+            """, (
+                timestamp, symbol_id,
+                yes_price['bid'], yes_price['ask'], yes_price['mid'], yes_price['volume'],
+                no_price['bid'], no_price['ask'], no_price['mid'], no_price['volume'],
+                spread, is_arbitrage, estimated_profit_pct
+            ))
+            self.conn.commit()
+
+            # Log arbitrage opportunities
+            if is_arbitrage:
+                logger.info(
+                    f"💰 ARBITRAGE: {market_id} | "
+                    f"Spread: ${spread:.4f} | "
+                    f"Profit: {estimated_profit_pct:.2f}%"
+                )
+
+        except Exception as e:
+            logger.error(f"Error inserting price data: {e}")
+            self.conn.rollback()
 
     async def start(self, enable_early_exit: bool = True):
         """
@@ -135,31 +394,22 @@ class ArbitrageMonitor:
             enable_early_exit: If True, monitor positions for early exit
         """
         try:
+            # Build token-to-market mapping from database
+            self._build_token_market_map()
+
+            if not self.token_market_map:
+                logger.error("No markets with token IDs found. Run market_fetcher first.")
+                return
+
             # Connect to WebSocket
             connected = await self.ws_provider.connect()
             if not connected:
                 logger.error("Failed to connect to Polymarket WebSocket")
                 return
 
-            # Get active markets from database
-            markets = self._get_active_markets()
-            if not markets:
-                logger.warning("No active markets found in database. Run market_fetcher first.")
-                return
-
-            logger.info(f"Monitoring {len(markets)} markets for arbitrage opportunities")
-
-            # Extract token IDs and subscribe
-            token_ids = []
-            for market in markets:
-                # For now, we need to get token IDs from market data
-                # TODO: Store token IDs in binary_markets table
-                logger.info(f"Market: {market['question'][:60]}...")
-
-            if not token_ids:
-                logger.warning("No token IDs found. Need to fetch from Polymarket API.")
-                # TODO: Fetch token IDs from Polymarket API
-                return
+            # Get all token IDs to subscribe
+            token_ids = list(self.token_market_map.keys())
+            logger.info(f"Subscribing to {len(token_ids)} tokens ({len(token_ids) // 2} markets)")
 
             # Subscribe to all token IDs
             await self.ws_provider.subscribe_assets(token_ids)
@@ -180,11 +430,14 @@ class ArbitrageMonitor:
     async def _monitoring_loop(self):
         """Main monitoring loop - process WebSocket messages."""
         try:
+            import json
+
             async for message in self.ws_provider.ws:
                 try:
-                    import json
                     data = json.loads(message)
-                    await self.ws_provider.process_message(data)
+
+                    # Process message and insert into database
+                    await self._process_ws_message(data)
 
                     # Check for arbitrage opportunities
                     await self._check_opportunities()
@@ -321,6 +574,8 @@ class ArbitrageMonitor:
                 SELECT
                     bm.id,
                     bm.market_id,
+                    bm.yes_token_id,
+                    bm.no_token_id,
                     bm.question,
                     bm.category,
                     bm.end_date,
@@ -331,6 +586,8 @@ class ArbitrageMonitor:
                 WHERE bm.status = 'active'
                     AND bm.end_date > NOW()
                     AND bm.category IN ('politics', 'sports')  -- Zero fees!
+                    AND bm.yes_token_id IS NOT NULL
+                    AND bm.no_token_id IS NOT NULL
                 ORDER BY bm.end_date ASC
                 LIMIT 50
             """)
@@ -340,11 +597,13 @@ class ArbitrageMonitor:
                 markets.append({
                     'id': row[0],
                     'market_id': row[1],
-                    'question': row[2],
-                    'category': row[3],
-                    'end_date': row[4],
-                    'symbol': row[5],
-                    'symbol_id': row[6]
+                    'yes_token_id': row[2],
+                    'no_token_id': row[3],
+                    'question': row[4],
+                    'category': row[5],
+                    'end_date': row[6],
+                    'symbol': row[7],
+                    'symbol_id': row[8]
                 })
 
             return markets

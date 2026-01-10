@@ -204,24 +204,30 @@ class PolymarketMarketFetcher:
                     INSERT INTO binary_markets (
                         symbol_id,
                         market_id,
+                        yes_token_id,
+                        no_token_id,
                         question,
                         description,
                         category,
                         end_date,
                         status
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, 'active'
+                        %s, %s, %s, %s, %s, %s, %s, %s, 'active'
                     )
                     ON CONFLICT (market_id) DO UPDATE
                     SET question = EXCLUDED.question,
                         description = EXCLUDED.description,
                         category = EXCLUDED.category,
                         end_date = EXCLUDED.end_date,
+                        yes_token_id = EXCLUDED.yes_token_id,
+                        no_token_id = EXCLUDED.no_token_id,
                         status = EXCLUDED.status,
                         updated_at = NOW()
                 """, (
                     symbol_id,
                     market_id,
+                    yes_token_id,
+                    no_token_id,
                     question,
                     description[:1000] if description else None,
                     category,
