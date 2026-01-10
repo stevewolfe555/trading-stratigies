@@ -121,10 +121,10 @@ def run():
                             "details": sig["details"],
                         }
                         try:
-                            r.publish("signals", json.dumps(msg))
+                            r.publish("signals", json.dumps(payload))
                         except Exception as e:
                             logger.debug("Redis publish error: {}", e)
-                        logger.info(f"Signal: {msg}")
+                        logger.info(f"Signal: {payload}")
 
             time.sleep(1)  # Check every 1 second for maximum responsiveness
         except Exception as e:
