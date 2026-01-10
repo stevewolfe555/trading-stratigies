@@ -4,3 +4,5 @@ python-dotenv>=1.0
 redis>=5.0
 loguru>=0.7
 requests>=2.31
+py-clob-client>=0.20  # Polymarket CLOB API client
+aiohttp>=3.9  # Async HTTP for Polymarket API

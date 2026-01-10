@@ -114,7 +114,13 @@ class ProviderRouter:
         # Forex: 6 characters, no dots (GBPUSD, EURUSD, etc.)
         if len(symbol) == 6 and symbol.isalpha():
             return self.providers.get('ig')
-        
+
+        # Polymarket binary options
+        # Format: PRES2024-TRUMP, BTC-100K-Q1, etc.
+        # Heuristic: Contains dash and longer than typical forex pairs
+        if '-' in symbol and len(symbol) > 6:
+            return self.providers.get('polymarket')
+
         logger.warning(f"No provider found for symbol: {symbol}")
         return None
     
