@@ -127,8 +127,13 @@ class ArbitrageMonitor:
             f"Min profit: {min_profit_pct * 100:.2f}%"
         )
 
-    async def start(self):
-        """Start monitoring for arbitrage opportunities."""
+    async def start(self, enable_early_exit: bool = True):
+        """
+        Start monitoring for arbitrage opportunities.
+
+        Args:
+            enable_early_exit: If True, monitor positions for early exit
+        """
         try:
             # Connect to WebSocket
             connected = await self.ws_provider.connect()
@@ -159,8 +164,11 @@ class ArbitrageMonitor:
             # Subscribe to all token IDs
             await self.ws_provider.subscribe_assets(token_ids)
 
-            # Start monitoring loop
-            await self._monitoring_loop()
+            # Run monitoring loop and position monitor in parallel
+            await asyncio.gather(
+                self._monitoring_loop(),
+                self.monitor_positions_for_exit(enable_early_exit)
+            )
 
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user")
@@ -345,6 +353,209 @@ class ArbitrageMonitor:
             logger.error(f"Failed to get active markets: {e}")
             return []
 
+    async def monitor_positions_for_exit(self, enable_early_exit: bool = True):
+        """
+        Monitor open positions for early exit opportunities.
+
+        Runs continuously in background, checking every 60 seconds.
+        Exits positions when spread normalizes to >= $1.00.
+
+        Args:
+            enable_early_exit: If True, automatically exit when profitable
+        """
+        if not enable_early_exit:
+            logger.info("Early exit monitoring disabled")
+            return
+
+        logger.info("Starting early exit position monitor (checks every 60s)")
+        early_exits = 0
+        early_exit_profits = Decimal('0')
+
+        while True:
+            try:
+                # Get open positions
+                positions = self.strategy.get_open_positions()
+
+                for position in positions:
+                    # Get current spread (would need to query latest prices)
+                    # For now, this is a placeholder - actual implementation
+                    # would fetch current YES/NO prices from database
+                    current_spread = await self._get_current_spread(
+                        position['symbol_id']
+                    )
+
+                    if current_spread is None:
+                        continue
+
+                    # Check if should exit
+                    should_exit, reason = self._should_exit_position(
+                        position, current_spread
+                    )
+
+                    if should_exit:
+                        logger.info(
+                            f"🚪 EXIT SIGNAL: {position['symbol']} | "
+                            f"Entry: ${position['entry_spread']:.4f} | "
+                            f"Current: ${current_spread:.4f} | "
+                            f"Reason: {reason}"
+                        )
+
+                        # Exit the position
+                        success = await self._exit_position(
+                            position, current_spread, reason
+                        )
+
+                        if success:
+                            early_exits += 1
+                            profit = current_spread - position['entry_spread']
+                            early_exit_profits += profit
+
+                            logger.success(
+                                f"✅ EARLY EXIT #{early_exits} | "
+                                f"{position['symbol']} | "
+                                f"Profit: ${profit:.4f} | "
+                                f"Hold time: {self._calc_hold_time(position)} min"
+                            )
+
+                # Sleep for 60 seconds before next check
+                await asyncio.sleep(60)
+
+            except Exception as e:
+                logger.error(f"Error in position monitor: {e}")
+                await asyncio.sleep(60)
+
+    async def _get_current_spread(self, symbol_id: int) -> Optional[Decimal]:
+        """
+        Get current spread for a market.
+
+        Args:
+            symbol_id: Symbol ID from database
+
+        Returns:
+            Current spread (YES ask + NO ask) or None
+        """
+        try:
+            cur = self.conn.cursor()
+            cur.execute("""
+                SELECT yes_ask, no_ask, spread
+                FROM binary_prices
+                WHERE symbol_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (symbol_id,))
+
+            row = cur.fetchone()
+            if row:
+                return Decimal(str(row[2]))  # spread column
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting current spread: {e}")
+            return None
+
+    def _should_exit_position(
+        self, position: Dict, current_spread: Decimal
+    ) -> tuple[bool, str]:
+        """
+        Determine if position should be exited early.
+
+        Exit criteria:
+        1. Spread normalized to >= $1.00 (take guaranteed profit)
+        2. Spread > $1.02 (bonus profit opportunity)
+        3. Near resolution (< 24 hours) and spread >= $0.99
+
+        Args:
+            position: Position dict
+            current_spread: Current market spread
+
+        Returns:
+            Tuple of (should_exit: bool, reason: str)
+        """
+        entry_spread = position['entry_spread']
+
+        # Exit if spread normalized or better
+        if current_spread >= Decimal('1.00'):
+            return True, "Spread normalized to $1.00+"
+
+        # Exit if massive spread widening (bonus profit)
+        if current_spread > Decimal('1.02'):
+            return True, f"Bonus profit (spread ${current_spread:.4f})"
+
+        # Check time to resolution
+        end_date = position.get('end_date')
+        if end_date:
+            hours_to_resolution = (end_date - datetime.now()).total_seconds() / 3600
+            if hours_to_resolution < 24 and current_spread >= Decimal('0.99'):
+                return True, "Near resolution, close enough"
+
+        return False, ""
+
+    async def _exit_position(
+        self, position: Dict, current_spread: Decimal, reason: str
+    ) -> bool:
+        """
+        Exit a position by selling both YES and NO.
+
+        For paper trading: Simulates the exit
+        For live trading: Executes real sell orders
+
+        Args:
+            position: Position dict
+            current_spread: Current spread
+            reason: Exit reason
+
+        Returns:
+            True if exit successful
+        """
+        try:
+            if self.mode == 'paper':
+                # Simulate exit for paper trading
+                profit = current_spread - position['entry_spread']
+                self.paper_pnl += profit
+
+                logger.info(
+                    f"📝 PAPER EXIT: {position['symbol']} | "
+                    f"Profit: ${profit:.4f} | "
+                    f"Reason: {reason}"
+                )
+                return True
+
+            elif self.mode == 'live':
+                # TODO: Implement real exit via trading client
+                # yes_response = await self.trading_client.place_market_order(
+                #     token_id=position['yes_token_id'],
+                #     amount=position['yes_qty'],
+                #     side="SELL"
+                # )
+                # no_response = await self.trading_client.place_market_order(
+                #     token_id=position['no_token_id'],
+                #     amount=position['no_qty'],
+                #     side="SELL"
+                # )
+                logger.warning("Live exit not yet implemented")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to exit position: {e}")
+            return False
+
+    def _calc_hold_time(self, position: Dict) -> int:
+        """
+        Calculate hold time in minutes.
+
+        Args:
+            position: Position dict
+
+        Returns:
+            Hold time in minutes
+        """
+        opened_at = position.get('opened_at')
+        if opened_at:
+            return int((datetime.now() - opened_at).total_seconds() / 60)
+        return 0
+
     async def stop(self):
         """Stop monitoring and cleanup."""
         if self.ws_provider and self.ws_provider.ws:
@@ -375,6 +586,10 @@ def main():
                        help='Maximum spread to execute (e.g., 0.995 = buy if YES+NO < $0.995)')
     parser.add_argument('--min-profit', type=float, default=0.005,
                        help='Minimum profit percentage (e.g., 0.005 = 0.5%%)')
+    parser.add_argument('--early-exit', action='store_true', default=True,
+                       help='Enable early exit when spread normalizes (default: enabled)')
+    parser.add_argument('--no-early-exit', action='store_false', dest='early_exit',
+                       help='Disable early exit, hold all positions to resolution')
 
     args = parser.parse_args()
 
@@ -395,9 +610,15 @@ def main():
         min_profit_pct=Decimal(str(args.min_profit))
     )
 
+    # Log early exit status
+    if args.early_exit:
+        logger.info("🚀 Early exit enabled - will sell when spread normalizes to $1.00+")
+    else:
+        logger.info("⏳ Early exit disabled - holding all positions to resolution")
+
     # Start monitoring
     try:
-        asyncio.run(monitor.start())
+        asyncio.run(monitor.start(enable_early_exit=args.early_exit))
     except KeyboardInterrupt:
         logger.info("Shutting down...")
 
