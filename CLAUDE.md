@@ -35,42 +35,60 @@ docker compose up -d ingestion
 docker compose down
 ```
 
-### Laravel Application (Runs Locally)
+### Laravel Application (Docker)
 ```bash
-cd web
+# Start all services including web application
+docker compose up -d
 
-# Initial setup
-composer install
-npm install
-php artisan migrate
+# Check all services including web
+docker compose ps
 
-# Development server
-php artisan serve --host=127.0.0.1 --port=8002
+# View Laravel logs
+docker compose logs web -f
 
-# Frontend build
-npm run build        # Production build
-npm run dev          # Development with hot reload
+# Artisan commands (via wrapper script)
+./artisan migrate
+./artisan tinker
+./artisan route:list
+./artisan migrate:fresh  # Reset database
 
-# Database operations
-php artisan migrate                    # Run migrations
-php artisan migrate:rollback          # Rollback last batch
-php artisan migrate:fresh             # Drop all tables and re-migrate
+# Composer operations
+./composer install
+./composer require package/name
+./composer dump-autoload
 
-# Clear caches
-php artisan optimize:clear
-php artisan view:clear
-php artisan cache:clear
+# NPM operations
+# Note: Vite runs automatically via supervisor, no need to start manually
+./npm install
+./npm run build  # Production build only
 
-# Database access
-php artisan tinker   # Laravel REPL
+# Access Laravel shell
+docker compose exec web bash
+
+# Run PHPUnit tests
+docker compose exec web vendor/bin/phpunit
+
+# Restart web container (after .env changes)
+docker compose restart web
+
+# Rebuild after Dockerfile changes
+docker compose build web
+docker compose up -d web
+
+# Stop all services
+docker compose down
 ```
+
+### Development URLs
+- **Laravel**: http://localhost:8001
+- **Vite HMR**: http://localhost:5173 (auto-handled)
+- **Reverb WebSocket**: ws://localhost:8080
 
 ### Testing
 ```bash
 # PHP tests (Laravel/PHPUnit)
-cd web
-vendor/bin/phpunit                    # All tests
-vendor/bin/phpunit --filter testName  # Specific test
+docker compose exec web vendor/bin/phpunit                    # All tests
+docker compose exec web vendor/bin/phpunit --filter testName  # Specific test
 
 # Python tests (direct scripts)
 cd services/ingestion

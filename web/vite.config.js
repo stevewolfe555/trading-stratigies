@@ -8,4 +8,17 @@ export default defineConfig({
             refresh: true,
         }),
     ],
+    server: {
+        host: '0.0.0.0', // Allow external connections (Docker)
+        port: 5173,
+        strictPort: true,
+        hmr: {
+            host: 'localhost', // Browser HMR connects to localhost
+            port: 5173,
+        },
+        watch: {
+            usePolling: true, // Required for Docker bind mounts
+            interval: 1000,
+        },
+    },
 });

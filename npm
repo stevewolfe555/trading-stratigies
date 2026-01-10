@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# Wrapper script for running npm commands in Docker
+# Usage: ./npm install
+#        ./npm run build
+
+if [ ! -f docker-compose.yml ]; then
+    echo "Error: docker-compose.yml not found. Run from project root."
+    exit 1
+fi
+
+docker compose exec web npm "$@"

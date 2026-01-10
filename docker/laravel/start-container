@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+if [ "$SUPERVISOR_PHP_USER" != "root" ] && [ "$SUPERVISOR_PHP_USER" != "sail" ]; then
+    echo "You should set SUPERVISOR_PHP_USER to either 'sail' or 'root'."
+    exit 1
+fi
+
+# Adjust user ID to match host user (for file permissions)
+if [ ! -z "$WWWUSER" ]; then
+    usermod -u $WWWUSER sail
+fi
+
+# Ensure Composer cache is writable
+if [ ! -d /.composer ]; then
+    mkdir /.composer
+fi
+chmod -R ugo+rw /.composer
+
+# Install Composer dependencies if vendor directory is empty
+if [ ! -d "vendor" ] || [ -z "$(ls -A vendor)" ]; then
+    echo "Installing Composer dependencies..."
+    composer install --no-interaction --prefer-dist --optimize-autoloader
+fi
+
+# Install NPM dependencies if node_modules is empty
+if [ ! -d "node_modules" ] || [ -z "$(ls -A node_modules)" ]; then
+    echo "Installing NPM dependencies..."
+    npm install
+fi
+
+# Generate app key if not exists
+if grep -q "APP_KEY=$" .env 2>/dev/null || [ ! -f .env ]; then
+    echo "Generating application key..."
+    php artisan key:generate --ansi
+fi
+
+# Run database migrations
+echo "Running database migrations..."
+php artisan migrate --force --no-interaction
+
+# Allow passing custom commands
+if [ $# -gt 0 ]; then
+    if [ "$SUPERVISOR_PHP_USER" = "root" ]; then
+        exec "$@"
+    else
+        exec gosu $WWWUSER "$@"
+    fi
+else
+    # Start supervisor to manage PHP + Vite
+    exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+fi

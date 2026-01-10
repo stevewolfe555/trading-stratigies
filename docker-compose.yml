@@ -73,6 +73,12 @@ services:
     environment:
       APP_ENV: local
       APP_DEBUG: "true"
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: ${POSTGRES_DB:-trading}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       BROADCAST_CONNECTION: reverb
       # Reverb server bind
       REVERB_SERVER_HOST: 0.0.0.0
@@ -101,6 +107,12 @@ services:
     environment:
       APP_ENV: local
       APP_DEBUG: "true"
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: ${POSTGRES_DB:-trading}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       BROADCAST_CONNECTION: reverb
       # Inside Docker network, hit Reverb by service name
       REVERB_HOST: reverb
@@ -130,6 +142,76 @@ services:
     volumes:
       - ./services/profile_calculator:/app
     command: ["python", "-m", "app.main"]
+
+  web:
+    build:
+      context: ./docker/laravel
+      args:
+        WWWGROUP: '${WWWGROUP:-1000}'
+        WWWUSER: '${WWWUSER:-1000}'
+    container_name: trading_web
+    working_dir: /var/www/html
+    volumes:
+      - ./web:/var/www/html
+    ports:
+      - "${HOST_WEB_PORT:-8001}:80"
+      - "${HOST_VITE_PORT:-5173}:5173"
+    environment:
+      # Laravel environment
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: "http://localhost:${HOST_WEB_PORT:-8001}"
+
+      # Database (Docker service names)
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: ${POSTGRES_DB:-trading}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+      # Redis (Docker service name)
+      REDIS_CLIENT: predis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      # Reverb WebSocket (Docker service name for server-side)
+      REVERB_APP_ID: ${REVERB_APP_ID:-local-app}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local-key}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local-secret}
+      REVERB_HOST: reverb
+      REVERB_PORT: 8080
+      REVERB_SCHEME: http
+
+      # Vite environment (browser-side connections)
+      VITE_APP_NAME: "${APP_NAME:-Laravel}"
+      VITE_REVERB_APP_KEY: ${REVERB_APP_KEY:-local-key}
+      VITE_REVERB_HOST: ${VITE_REVERB_HOST:-127.0.0.1}
+      VITE_REVERB_PORT: ${HOST_REVERB_PORT:-8080}
+      VITE_REVERB_SCHEME: http
+
+      # Session/Cache
+      SESSION_DRIVER: database
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      BROADCAST_CONNECTION: reverb
+
+      # User ID for file permissions
+      WWWUSER: '${WWWUSER:-1000}'
+
+      # Supervisor control
+      SUPERVISOR_PHP_COMMAND: "/usr/bin/php -d variables_order=EGPCS /var/www/html/artisan serve --host=0.0.0.0 --port=80"
+      SUPERVISOR_PHP_USER: "sail"
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      reverb:
+        condition: service_started
+    networks:
+      - default
 
 volumes:
   db_data:

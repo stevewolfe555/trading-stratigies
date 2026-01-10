@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# Wrapper script for running artisan commands in Docker
+# Usage: ./artisan migrate
+#        ./artisan tinker
+
+if [ ! -f docker-compose.yml ]; then
+    echo "Error: docker-compose.yml not found. Run from project root."
+    exit 1
+fi
+
+docker compose exec web php artisan "$@"
