@@ -301,6 +301,82 @@ def run():
         else:
             logger.warning("Router: Alpaca credentials not set; skipping Alpaca WS worker")
 
+        # Polymarket worker if enabled
+        if os.getenv("POLYMARKET_ENABLED", "false").lower() == "true":
+            logger.info("Starting Polymarket WebSocket worker")
+
+            def run_polymarket_ws():
+                """Run Polymarket in asyncio event loop within thread."""
+                try:
+                    import asyncio
+                    from app.providers.polymarket_ws import PolymarketWebSocketProvider
+                    import psycopg2
+
+                    # Create new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    # Get database connection
+                    db_conn = psycopg2.connect(
+                        host=settings.postgres_host,
+                        database=settings.postgres_db,
+                        user=settings.postgres_user,
+                        password=settings.postgres_password,
+                        port=settings.postgres_port
+                    )
+
+                    # Create provider with config from env
+                    # CLOB (Central Limit Order Book) = NO GAS FEES!
+                    config = {
+                        'ws_url': os.getenv('POLYMARKET_WS_URL',
+                            'wss://ws-subscriptions-clob.polymarket.com/ws/market'),
+                        'spread_threshold': float(os.getenv('POLYMARKET_SPREAD_THRESHOLD', '1.00')),
+                        'fee_rate': float(os.getenv('POLYMARKET_FEE_RATE', '0.00')),
+                        'min_position_size': float(os.getenv('POLYMARKET_MIN_POSITION_SIZE', '100'))
+                    }
+                    provider = PolymarketWebSocketProvider(db_conn, config)
+
+                    # Fetch active markets with token IDs
+                    cur = db_conn.cursor()
+                    cur.execute("""
+                        SELECT yes_token_id, no_token_id
+                        FROM binary_markets
+                        WHERE status = 'active'
+                          AND yes_token_id IS NOT NULL
+                          AND no_token_id IS NOT NULL
+                    """)
+
+                    # Collect all token IDs (both YES and NO)
+                    token_ids = []
+                    for yes_id, no_id in cur.fetchall():
+                        token_ids.append(yes_id)
+                        token_ids.append(no_id)
+
+                    if not token_ids:
+                        logger.warning("No active markets with token IDs found. Run market_fetcher first!")
+                        return
+
+                    logger.info(f"Subscribing to {len(token_ids)} token IDs from {len(token_ids)//2} markets")
+
+                    # Connect, subscribe, and listen
+                    async def start():
+                        await provider.connect()
+                        await provider.subscribe_assets(token_ids)
+                        await provider.listen()
+
+                    # Run until cancelled
+                    loop.run_until_complete(start())
+
+                except Exception as e:
+                    logger.exception("Polymarket WS worker error: {}", e)
+
+            t_poly = threading.Thread(target=run_polymarket_ws, daemon=True)
+            t_poly.start()
+            threads.append(t_poly)
+            logger.info("Polymarket worker started")
+        else:
+            logger.info("Polymarket disabled (set POLYMARKET_ENABLED=true to enable)")
+
         if not threads:
             logger.error("Router: no workers started (missing credentials?)")
             time.sleep(60)

@@ -16,6 +16,7 @@ Features:
 """
 
 import argparse
+import json
 import requests
 import psycopg2
 from datetime import datetime, timezone
@@ -76,12 +77,20 @@ class PolymarketMarketFetcher:
 
             if active_only:
                 params["active"] = "true"
+                params["closed"] = "false"  # Only fetch non-closed markets
 
             response = requests.get(url, params=params, timeout=30)
             response.raise_for_status()
 
             markets = response.json()
             logger.info(f"Fetched {len(markets)} markets")
+
+            # Filter out closed markets
+            markets = [
+                m for m in markets
+                if not m.get('closed', False)
+            ]
+            logger.info(f"After filtering closed markets: {len(markets)} markets")
 
             # Filter by category if specified
             if categories:
@@ -154,24 +163,28 @@ class PolymarketMarketFetcher:
         for market in markets:
             try:
                 # Extract market data
-                market_id = market.get('id') or market.get('conditionId')
+                # IMPORTANT: Use conditionId (hex hash) not id (numeric)
+                # WebSocket messages use conditionId in the 'market' field
+                market_id = market.get('conditionId') or market.get('id')
                 question = market.get('question') or market.get('title', 'Unknown')
                 description = market.get('description', '')
                 category = market.get('category', 'uncategorized')
                 end_date_str = market.get('endDate') or market.get('end_date')
 
-                # Get token IDs for YES and NO
-                tokens = market.get('tokens', [])
+                # Get token IDs for YES and NO from clobTokenIds
+                clob_token_ids_str = market.get('clobTokenIds', '[]')
                 yes_token_id = None
                 no_token_id = None
 
-                for token in tokens:
-                    outcome = token.get('outcome', '').upper()
-                    token_id = token.get('token_id') or token.get('tokenId')
-                    if outcome == 'YES':
-                        yes_token_id = token_id
-                    elif outcome == 'NO':
-                        no_token_id = token_id
+                try:
+                    # clobTokenIds is a JSON string containing an array
+                    clob_token_ids = json.loads(clob_token_ids_str)
+                    if len(clob_token_ids) >= 2:
+                        # First token is YES, second is NO
+                        yes_token_id = clob_token_ids[0]
+                        no_token_id = clob_token_ids[1]
+                except (json.JSONDecodeError, IndexError, TypeError):
+                    logger.warning(f"Failed to parse clobTokenIds for market: {question[:50]}")
 
                 if not market_id or not yes_token_id or not no_token_id:
                     logger.warning(f"Skipping market with missing data: {question[:50]}")

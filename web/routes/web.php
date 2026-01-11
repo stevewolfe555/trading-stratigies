@@ -26,6 +26,11 @@ Route::view('backtesting', 'backtesting')
     ->middleware(['auth'])
     ->name('backtesting');
 
+// Binary Arbitrage - Binary options trading
+Route::view('binary-arbitrage', 'binary-arbitrage')
+    ->middleware(['auth'])
+    ->name('binary-arbitrage');
+
 Route::view('profile', 'profile')
     ->middleware(['auth'])
     ->name('profile');

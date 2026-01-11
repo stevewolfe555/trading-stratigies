@@ -39,6 +39,9 @@ new class extends Component
                     <x-nav-link :href="route('backtesting')" :active="request()->routeIs('backtesting')" wire:navigate>
                         🧪 Backtesting
                     </x-nav-link>
+                    <x-nav-link :href="route('binary-arbitrage')" :active="request()->routeIs('binary-arbitrage')" wire:navigate>
+                        🎲 Binary
+                    </x-nav-link>
                     <x-nav-link :href="route('account')" :active="request()->routeIs('account')" wire:navigate>
                         💼 Account
                     </x-nav-link>
@@ -95,6 +98,12 @@ new class extends Component
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('strategies')" :active="request()->routeIs('strategies')" wire:navigate>
                 ⚙️ Strategies
+            </x-responsive-nav-link>
+            <x-responsive-nav-link :href="route('backtesting')" :active="request()->routeIs('backtesting')" wire:navigate>
+                🧪 Backtesting
+            </x-responsive-nav-link>
+            <x-responsive-nav-link :href="route('binary-arbitrage')" :active="request()->routeIs('binary-arbitrage')" wire:navigate>
+                🎲 Binary
             </x-responsive-nav-link>
             <x-responsive-nav-link :href="route('account')" :active="request()->routeIs('account')" wire:navigate>
                 💼 Account

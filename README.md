@@ -273,11 +273,13 @@ docker compose logs profile_calculator -f
 
 ## 📚 Documentation
 
+- **[docs/README.md](docs/README.md)** - Documentation index (start here)
 - **[CURRENT_STATUS.md](CURRENT_STATUS.md)** - Platform status and capabilities
-- **[docs/TIMEZONE_STRATEGY.md](docs/TIMEZONE_STRATEGY.md)** - Timezone handling guide
-- **[docs/SPEC.md](docs/SPEC.md)** - Original specification
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture
-- **[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)** - Feature tracking
+- **[docs/system/OVERVIEW.md](docs/system/OVERVIEW.md)** - System overview
+- **[docs/system/DATA_FLOW.md](docs/system/DATA_FLOW.md)** - End-to-end data flow
+- **[docs/trading/TUNING_PLAYBOOK.md](docs/trading/TUNING_PLAYBOOK.md)** - How to tune/improve trading performance
+- **[docs/TIMEZONE_STRATEGY.md](docs/TIMEZONE_STRATEGY.md)** - Timezone handling guide
 
 ## 🐛 Troubleshooting
 
@@ -332,7 +334,7 @@ docker compose build && docker compose up -d
 3. **Portfolio Optimization** - Multi-stock position sizing
 4. **Mobile App** - iOS/Android monitoring
 
-📖 **See [BACKTESTING_PLAN.md](BACKTESTING_PLAN.md) for detailed implementation plan**
+ 📖 **See [BACKTESTING_PLAN.md](BACKTESTING_PLAN.md) for detailed backtesting/optimization plan**
 
 ## 🤝 Contributing
 

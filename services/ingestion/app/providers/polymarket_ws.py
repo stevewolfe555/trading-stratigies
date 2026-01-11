@@ -67,12 +67,20 @@ class PolymarketWebSocketProvider:
         self.spread_threshold = Decimal(self.config.get('spread_threshold', '0.98'))
 
         # Fee structure (2026): Most markets are fee-free!
-        # Only 15-minute crypto markets have taker fees (~3% at 50% odds)
-        # For arbitrage on political/sports markets: ZERO FEES!
-        self.fee_rate = Decimal(self.config.get('fee_rate', '0.00'))  # Fee-free for most markets!
+        # Fee configuration
+        # CLOB (Central Limit Order Book) = NO GAS FEES!
+        # Orders matched off-chain, only settlement on-chain
+        # Political/sports markets: ZERO trading fees
+        # Only 15-minute crypto markets have fees (we don't trade those)
+        self.fee_rate = Decimal(self.config.get('fee_rate', '0.00'))
+        self.min_position_size = Decimal(self.config.get('min_position_size', '100'))
 
         # Performance optimization: cache symbol IDs
         self.symbol_cache: Dict[str, int] = {}
+
+        # Market price cache: stores latest prices for each market
+        # Key: market_id, Value: {'yes_bid', 'yes_ask', 'no_bid', 'no_ask', 'timestamp'}
+        self.market_prices: Dict[str, Dict] = {}
 
         # Connection state
         self.is_connected = False
@@ -176,35 +184,174 @@ class PolymarketWebSocketProvider:
             logger.error(f"Failed to unsubscribe from assets: {e}")
             return False
 
-    async def process_message(self, message: Dict):
+    async def process_message(self, message):
         """
         Process incoming WebSocket message.
 
         Speed critical: Target <10ms processing time
 
-        Polymarket sends three event types:
-        - "book": Full orderbook snapshot (bids/asks for YES and NO)
-        - "price_change": Best bid/ask updates
-        - "last_trade_price": Recent trade data
+        Polymarket sends two message types:
+
+        1. Price change events:
+        {
+            'market': '0xabc...',
+            'event_type': 'price_change',
+            'timestamp': '1768064235288',
+            'price_changes': [
+                {
+                    'asset_id': '123...',
+                    'price': '0.5',
+                    'size': '100',
+                    'side': 'BUY',
+                    'best_bid': '0.49',
+                    'best_ask': '0.51'
+                },
+                ...
+            ]
+        }
+
+        2. Orderbook snapshots (arrays):
+        [
+            {
+                'market': '0xabc...',
+                'asset_id': '123...',
+                'timestamp': '1768064050386',
+                'bids': [{'price': '0.5', 'size': '100'}, ...],
+                'asks': [{'price': '0.51', 'size': '200'}, ...]
+            }
+        ]
 
         Args:
-            message: Parsed JSON message from WebSocket
+            message: Parsed JSON message from WebSocket (list or dict)
         """
         try:
-            event_type = message.get('event_type')
-
-            if event_type == 'book':
-                await self._process_book_event(message)
-            elif event_type == 'price_change':
+            # Handle price_change events (most common)
+            if isinstance(message, dict) and message.get('event_type') == 'price_change':
                 await self._process_price_change(message)
-            elif event_type == 'last_trade_price':
-                # Trade data - can be used for volume analysis later
-                logger.debug(f"Trade: {message}")
-            else:
-                logger.debug(f"Unknown event type: {event_type}")
+            # Handle orderbook snapshot arrays
+            elif isinstance(message, list):
+                for update in message:
+                    if isinstance(update, dict):
+                        await self._process_orderbook_update(update)
+            # Handle single orderbook update dict
+            elif isinstance(message, dict):
+                await self._process_orderbook_update(message)
 
         except Exception as e:
             logger.error(f"Error processing message: {e}")
+
+    async def _process_price_change(self, data: Dict):
+        """
+        Process price_change event from Polymarket.
+
+        Message format:
+        {
+            'market': '0x1fbb...',
+            'event_type': 'price_change',
+            'timestamp': '1768064235288',
+            'price_changes': [
+                {
+                    'asset_id': '113539...',
+                    'price': '0.002',
+                    'size': '3567.87',
+                    'side': 'BUY',
+                    'best_bid': '0.003',
+                    'best_ask': '0.006'
+                },
+                ...
+            ]
+        }
+        """
+        import time
+        start_time = time.perf_counter()
+
+        market_id = data.get('market')
+        timestamp_ms = data.get('timestamp')
+        price_changes = data.get('price_changes', [])
+
+        if not market_id or not timestamp_ms:
+            return
+
+        # Parse timestamp from Unix milliseconds
+        try:
+            timestamp = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+        except Exception as e:
+            logger.error(f"Failed to parse timestamp {timestamp_ms}: {e}")
+            return
+
+        # Process each price change
+        for change in price_changes:
+            asset_id = change.get('asset_id')
+            best_bid_str = change.get('best_bid')
+            best_ask_str = change.get('best_ask')
+
+            if not asset_id or not best_bid_str or not best_ask_str:
+                continue
+
+            # Convert to Decimal
+            best_bid = Decimal(str(best_bid_str))
+            best_ask = Decimal(str(best_ask_str))
+            mid_price = (best_bid + best_ask) / 2
+
+            # Determine if this is YES or NO token
+            is_yes_token = await self._is_yes_token(market_id, asset_id)
+            if is_yes_token is None:
+                continue
+
+            # Get symbol_id
+            symbol_id = await self._get_symbol_id(market_id)
+            if not symbol_id:
+                continue
+
+            # Update market price cache
+            if market_id not in self.market_prices:
+                self.market_prices[market_id] = {}
+
+            if is_yes_token:
+                self.market_prices[market_id]['yes_bid'] = best_bid
+                self.market_prices[market_id]['yes_ask'] = best_ask
+            else:
+                self.market_prices[market_id]['no_bid'] = best_bid
+                self.market_prices[market_id]['no_ask'] = best_ask
+
+            self.market_prices[market_id]['timestamp'] = timestamp
+            self.market_prices[market_id]['symbol_id'] = symbol_id
+
+            # Check if we have both YES and NO prices
+            market_data = self.market_prices[market_id]
+            if all(k in market_data for k in ['yes_bid', 'yes_ask', 'no_bid', 'no_ask']):
+                detection_time = time.perf_counter()
+
+                # FAST PATH: Check for arbitrage BEFORE database insert (sub-second detection)
+                spread = market_data['yes_ask'] + market_data['no_ask']
+
+                # Immediate arbitrage alert (no DB latency)
+                if spread < self.spread_threshold:
+                    alert_time = time.perf_counter()
+                    gross_profit = Decimal('1.00') - spread
+                    profit_pct = (gross_profit / spread) * 100
+
+                    # Calculate latencies
+                    ws_to_detection_ms = (detection_time - start_time) * 1000
+                    ws_to_alert_ms = (alert_time - start_time) * 1000
+
+                    logger.success(
+                        f"🚨 INSTANT ARBITRAGE! {market_id[:8]}... | "
+                        f"Spread: ${spread:.4f} | Profit: {profit_pct:.2f}% | "
+                        f"YES: {market_data['yes_ask']:.3f} NO: {market_data['no_ask']:.3f} | "
+                        f"⚡ {ws_to_alert_ms:.2f}ms (detection: {ws_to_detection_ms:.2f}ms)"
+                    )
+
+                # Then insert to database (async, non-blocking)
+                db_start = time.perf_counter()
+                await self._insert_market_price(market_id, market_data)
+                db_end = time.perf_counter()
+
+                # Log timing for performance monitoring (only occasionally to avoid log spam)
+                if spread < self.spread_threshold:
+                    total_ms = (db_end - start_time) * 1000
+                    db_ms = (db_end - db_start) * 1000
+                    logger.info(f"⏱️  Total: {total_ms:.2f}ms | DB: {db_ms:.2f}ms")
 
     async def _process_orderbook_update(self, data: Dict):
         """
@@ -212,93 +359,105 @@ class PolymarketWebSocketProvider:
 
         Speed critical: <10ms total
 
-        Message format (estimated):
+        Actual message format from Polymarket CLOB:
         {
-            "type": "orderbook_update",
-            "market_id": "0x1234abcd...",
-            "timestamp": "2026-01-09T10:30:45.123Z",
-            "yes_book": {
-                "bids": [[0.52, 1000], [0.51, 500]],
-                "asks": [[0.53, 800], [0.54, 1200]]
-            },
-            "no_book": {
-                "bids": [[0.44, 900], [0.43, 600]],
-                "asks": [[0.45, 1100], [0.46, 700]]
-            }
+            'market': '0xaf9d0e...',  # Market ID (hex string)
+            'asset_id': '4153292...',  # Token ID (YES or NO)
+            'timestamp': '1768064050386',  # Unix timestamp in milliseconds
+            'bids': [{'price': '0.5', 'size': '100'}, ...],
+            'asks': [{'price': '0.51', 'size': '200'}, ...]
         }
         """
-        market_id = data.get('market_id')
-        timestamp_str = data.get('timestamp')
+        import time
+        start_time = time.perf_counter()
 
-        # Parse timestamp
-        timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        market_id = data.get('market')
+        asset_id = data.get('asset_id')
+        timestamp_ms = data.get('timestamp')
+        bids = data.get('bids', [])
+        asks = data.get('asks', [])
 
-        # Extract YES order book
-        yes_book = data.get('yes_book', {})
-        yes_bids = yes_book.get('bids', [])
-        yes_asks = yes_book.get('asks', [])
+        if not market_id or not asset_id or not timestamp_ms:
+            return
 
-        yes_bid = Decimal(str(yes_bids[0][0])) if yes_bids else Decimal('0')
-        yes_ask = Decimal(str(yes_asks[0][0])) if yes_asks else Decimal('1')
-        yes_mid = (yes_bid + yes_ask) / 2
-        yes_volume = int(yes_bids[0][1]) if yes_bids else 0
+        # Parse timestamp from Unix milliseconds
+        try:
+            timestamp = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+        except Exception as e:
+            logger.error(f"Failed to parse timestamp {timestamp_ms}: {e}")
+            return
 
-        # Extract NO order book
-        no_book = data.get('no_book', {})
-        no_bids = no_book.get('bids', [])
-        no_asks = no_book.get('asks', [])
+        # Extract best bid/ask
+        if not bids or not asks:
+            return
 
-        no_bid = Decimal(str(no_bids[0][0])) if no_bids else Decimal('0')
-        no_ask = Decimal(str(no_asks[0][0])) if no_asks else Decimal('1')
-        no_mid = (no_bid + no_ask) / 2
-        no_volume = int(no_bids[0][1]) if no_bids else 0
+        best_bid = Decimal(str(bids[0]['price']))
+        best_ask = Decimal(str(asks[0]['price']))
+        bid_size = Decimal(str(bids[0]['size']))
+        ask_size = Decimal(str(asks[0]['size']))
+        mid_price = (best_bid + best_ask) / 2
 
-        # Calculate spread (what we'd pay to buy both)
-        spread = yes_ask + no_ask
-
-        # Check if arbitrage opportunity exists
-        is_arbitrage = spread < self.spread_threshold
-
-        # Calculate estimated profit percentage (after fees)
-        if spread > 0:
-            gross_profit = Decimal('1.00') - spread
-            fees = spread * self.fee_rate
-            net_profit = gross_profit - fees
-            estimated_profit_pct = (net_profit / spread) * 100
-        else:
-            estimated_profit_pct = Decimal('0')
+        # Determine if this is YES or NO token
+        # Look up in database to see which token this is
+        is_yes_token = await self._is_yes_token(market_id, asset_id)
+        if is_yes_token is None:
+            # Market not in our database
+            return
 
         # Get symbol_id (use cache for speed)
         symbol_id = await self._get_symbol_id(market_id)
         if not symbol_id:
-            logger.warning(f"No symbol found for market {market_id}")
             return
 
-        # Insert into database (fast query, single round-trip)
-        await self._insert_price(
-            timestamp=timestamp,
-            symbol_id=symbol_id,
-            yes_bid=yes_bid,
-            yes_ask=yes_ask,
-            yes_mid=yes_mid,
-            yes_volume=yes_volume,
-            no_bid=no_bid,
-            no_ask=no_ask,
-            no_mid=no_mid,
-            no_volume=no_volume,
-            spread=spread,
-            is_arbitrage=is_arbitrage,
-            estimated_profit_pct=estimated_profit_pct
-        )
+        # Update market price cache
+        if market_id not in self.market_prices:
+            self.market_prices[market_id] = {}
 
-        # If arbitrage opportunity, publish alert (non-blocking)
-        if is_arbitrage:
-            logger.info(
-                f"ARBITRAGE: {market_id} | Spread: ${spread:.4f} | "
-                f"Profit: {estimated_profit_pct:.2f}%"
-            )
-            # TODO: Publish to Redis for real-time alerts
-            # await self._publish_arbitrage_alert(market_id, spread, estimated_profit_pct)
+        if is_yes_token:
+            self.market_prices[market_id]['yes_bid'] = best_bid
+            self.market_prices[market_id]['yes_ask'] = best_ask
+        else:
+            self.market_prices[market_id]['no_bid'] = best_bid
+            self.market_prices[market_id]['no_ask'] = best_ask
+
+        self.market_prices[market_id]['timestamp'] = timestamp
+        self.market_prices[market_id]['symbol_id'] = symbol_id
+
+        # Check if we have both YES and NO prices
+        market_data = self.market_prices[market_id]
+        if all(k in market_data for k in ['yes_bid', 'yes_ask', 'no_bid', 'no_ask']):
+            detection_time = time.perf_counter()
+
+            # FAST PATH: Check for arbitrage BEFORE database insert (sub-second detection)
+            spread = market_data['yes_ask'] + market_data['no_ask']
+
+            # Immediate arbitrage alert (no DB latency)
+            if spread < self.spread_threshold:
+                alert_time = time.perf_counter()
+                gross_profit = Decimal('1.00') - spread
+                profit_pct = (gross_profit / spread) * 100
+
+                # Calculate latencies
+                ws_to_detection_ms = (detection_time - start_time) * 1000
+                ws_to_alert_ms = (alert_time - start_time) * 1000
+
+                logger.success(
+                    f"🚨 INSTANT ARBITRAGE! {market_id[:8]}... | "
+                    f"Spread: ${spread:.4f} | Profit: {profit_pct:.2f}% | "
+                    f"YES: {market_data['yes_ask']:.3f} NO: {market_data['no_ask']:.3f} | "
+                    f"⚡ {ws_to_alert_ms:.2f}ms (detection: {ws_to_detection_ms:.2f}ms)"
+                )
+
+            # Then insert to database (async, non-blocking)
+            db_start = time.perf_counter()
+            await self._insert_market_price(market_id, market_data)
+            db_end = time.perf_counter()
+
+            # Log timing for performance monitoring
+            if spread < self.spread_threshold:
+                total_ms = (db_end - start_time) * 1000
+                db_ms = (db_end - db_start) * 1000
+                logger.info(f"⏱️  Total: {total_ms:.2f}ms | DB: {db_ms:.2f}ms")
 
     async def _get_symbol_id(self, market_id: str) -> Optional[int]:
         """
@@ -316,27 +475,164 @@ class PolymarketWebSocketProvider:
         if market_id in self.symbol_cache:
             return self.symbol_cache[market_id]
 
-        # Query database
+        # Query database (wrapped for async)
         try:
-            cur = self.conn.cursor()
-            cur.execute("""
-                SELECT s.id
-                FROM symbols s
-                JOIN binary_markets bm ON s.id = bm.symbol_id
-                WHERE bm.market_id = %s
-            """, (market_id,))
+            def _query():
+                cur = self.conn.cursor()
+                cur.execute("""
+                    SELECT s.id
+                    FROM symbols s
+                    JOIN binary_markets bm ON s.id = bm.symbol_id
+                    WHERE bm.market_id = %s
+                """, (market_id,))
+                row = cur.fetchone()
+                return row[0] if row else None
 
-            row = cur.fetchone()
-            if row:
-                symbol_id = row[0]
+            symbol_id = await asyncio.to_thread(_query)
+
+            if symbol_id:
                 self.symbol_cache[market_id] = symbol_id
-                return symbol_id
 
-            return None
+            return symbol_id
 
         except Exception as e:
             logger.error(f"Error looking up symbol ID: {e}")
             return None
+
+    async def _is_yes_token(self, market_id: str, asset_id: str) -> Optional[bool]:
+        """
+        Determine if asset_id is YES (True) or NO (False) token for a market.
+
+        Args:
+            market_id: Polymarket market ID (hex string)
+            asset_id: Token ID to check
+
+        Returns:
+            True if YES token, False if NO token, None if market not found
+        """
+        # Check cache first
+        cache_key = f"{market_id}:{asset_id}"
+        if cache_key in self.symbol_cache:
+            return self.symbol_cache[cache_key]
+
+        # Query database
+        try:
+            def _query():
+                cur = self.conn.cursor()
+                cur.execute("""
+                    SELECT yes_token_id, no_token_id
+                    FROM binary_markets
+                    WHERE market_id = %s
+                """, (market_id,))
+                row = cur.fetchone()
+                return row if row else None
+
+            result = await asyncio.to_thread(_query)
+
+            if not result:
+                return None
+
+            yes_token_id, no_token_id = result
+
+            if asset_id == yes_token_id:
+                self.symbol_cache[cache_key] = True
+                return True
+            elif asset_id == no_token_id:
+                self.symbol_cache[cache_key] = False
+                return False
+            else:
+                # Asset ID doesn't match either token
+                return None
+
+        except Exception as e:
+            logger.error(f"Error checking token type: {e}")
+            return None
+
+    async def _insert_market_price(self, market_id: str, market_data: Dict):
+        """
+        Insert combined YES/NO price data into binary_prices table.
+
+        Args:
+            market_id: Polymarket market ID
+            market_data: Dict with yes_bid, yes_ask, no_bid, no_ask, timestamp, symbol_id
+        """
+        try:
+            timestamp = market_data['timestamp']
+            symbol_id = market_data['symbol_id']
+            yes_bid = market_data['yes_bid']
+            yes_ask = market_data['yes_ask']
+            no_bid = market_data['no_bid']
+            no_ask = market_data['no_ask']
+
+            # Calculate mid prices
+            yes_mid = (yes_bid + yes_ask) / 2
+            no_mid = (no_bid + no_ask) / 2
+
+            # Calculate spread (what we'd pay to buy both YES and NO)
+            spread = yes_ask + no_ask
+
+            # Check if arbitrage opportunity exists
+            is_arbitrage = spread < self.spread_threshold
+
+            # Calculate estimated profit percentage
+            # CLOB = NO FEES! Simple calculation: profit = $1.00 - spread
+            if spread > 0:
+                gross_profit = Decimal('1.00') - spread
+
+                # Apply trading fees (0% for political/sports markets)
+                net_profit = gross_profit - (spread * self.fee_rate)
+                estimated_profit_pct = (net_profit / spread) * 100
+            else:
+                estimated_profit_pct = Decimal('0')
+
+            # Insert into database
+            def _insert():
+                cur = self.conn.cursor()
+                cur.execute("""
+                    INSERT INTO binary_prices (
+                        timestamp, symbol_id,
+                        yes_bid, yes_ask, yes_mid, yes_volume,
+                        no_bid, no_ask, no_mid, no_volume,
+                        spread, arbitrage_opportunity, estimated_profit_pct
+                    ) VALUES (
+                        %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s
+                    )
+                    ON CONFLICT (timestamp, symbol_id) DO UPDATE SET
+                        yes_bid = EXCLUDED.yes_bid,
+                        yes_ask = EXCLUDED.yes_ask,
+                        yes_mid = EXCLUDED.yes_mid,
+                        no_bid = EXCLUDED.no_bid,
+                        no_ask = EXCLUDED.no_ask,
+                        no_mid = EXCLUDED.no_mid,
+                        spread = EXCLUDED.spread,
+                        arbitrage_opportunity = EXCLUDED.arbitrage_opportunity,
+                        estimated_profit_pct = EXCLUDED.estimated_profit_pct
+                """, (
+                    timestamp, symbol_id,
+                    yes_bid, yes_ask, yes_mid, 0,  # volume not available from price_change events
+                    no_bid, no_ask, no_mid, 0,
+                    spread, is_arbitrage, estimated_profit_pct
+                ))
+                self.conn.commit()
+
+            await asyncio.to_thread(_insert)
+
+            # Only log arbitrage opportunities (critical for speed)
+            if is_arbitrage:
+                logger.success(
+                    f"🚨 ARBITRAGE! Market {market_id[:8]}... | "
+                    f"Spread: ${spread:.4f} | Profit: {estimated_profit_pct:.2f}% | "
+                    f"YES Ask: {yes_ask:.3f} + NO Ask: {no_ask:.3f}"
+                )
+
+        except Exception as e:
+            logger.error(f"Error inserting market price: {e}")
+            def _rollback():
+                self.conn.rollback()
+            await asyncio.to_thread(_rollback)
 
     async def _insert_price(
         self,
@@ -360,42 +656,47 @@ class PolymarketWebSocketProvider:
         Speed critical: <15ms database write
         """
         try:
-            cur = self.conn.cursor()
-            cur.execute("""
-                INSERT INTO binary_prices (
+            def _insert():
+                cur = self.conn.cursor()
+                cur.execute("""
+                    INSERT INTO binary_prices (
+                        timestamp, symbol_id,
+                        yes_bid, yes_ask, yes_mid, yes_volume,
+                        no_bid, no_ask, no_mid, no_volume,
+                        spread, arbitrage_opportunity, estimated_profit_pct
+                    ) VALUES (
+                        %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s
+                    )
+                    ON CONFLICT (timestamp, symbol_id) DO UPDATE SET
+                        yes_bid = EXCLUDED.yes_bid,
+                        yes_ask = EXCLUDED.yes_ask,
+                        yes_mid = EXCLUDED.yes_mid,
+                        yes_volume = EXCLUDED.yes_volume,
+                        no_bid = EXCLUDED.no_bid,
+                        no_ask = EXCLUDED.no_ask,
+                        no_mid = EXCLUDED.no_mid,
+                        no_volume = EXCLUDED.no_volume,
+                        spread = EXCLUDED.spread,
+                        arbitrage_opportunity = EXCLUDED.arbitrage_opportunity,
+                        estimated_profit_pct = EXCLUDED.estimated_profit_pct
+                """, (
                     timestamp, symbol_id,
                     yes_bid, yes_ask, yes_mid, yes_volume,
                     no_bid, no_ask, no_mid, no_volume,
-                    spread, arbitrage_opportunity, estimated_profit_pct
-                ) VALUES (
-                    %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s
-                )
-                ON CONFLICT (timestamp, symbol_id) DO UPDATE SET
-                    yes_bid = EXCLUDED.yes_bid,
-                    yes_ask = EXCLUDED.yes_ask,
-                    yes_mid = EXCLUDED.yes_mid,
-                    yes_volume = EXCLUDED.yes_volume,
-                    no_bid = EXCLUDED.no_bid,
-                    no_ask = EXCLUDED.no_ask,
-                    no_mid = EXCLUDED.no_mid,
-                    no_volume = EXCLUDED.no_volume,
-                    spread = EXCLUDED.spread,
-                    arbitrage_opportunity = EXCLUDED.arbitrage_opportunity,
-                    estimated_profit_pct = EXCLUDED.estimated_profit_pct
-            """, (
-                timestamp, symbol_id,
-                yes_bid, yes_ask, yes_mid, yes_volume,
-                no_bid, no_ask, no_mid, no_volume,
-                spread, is_arbitrage, estimated_profit_pct
-            ))
-            self.conn.commit()
+                    spread, is_arbitrage, estimated_profit_pct
+                ))
+                self.conn.commit()
+
+            await asyncio.to_thread(_insert)
 
         except Exception as e:
             logger.error(f"Error inserting price: {e}")
-            self.conn.rollback()
+            def _rollback():
+                self.conn.rollback()
+            await asyncio.to_thread(_rollback)
 
     async def listen(self):
         """
@@ -411,12 +712,12 @@ class PolymarketWebSocketProvider:
                 if not self.is_connected:
                     await self.connect()
 
-                    # Re-subscribe to all markets after reconnect
-                    markets_to_subscribe = list(self.subscribed_markets)
-                    self.subscribed_markets.clear()
+                    # Re-subscribe to all assets after reconnect
+                    assets_to_subscribe = list(self.subscribed_assets)
+                    self.subscribed_assets.clear()
 
-                    for market_id in markets_to_subscribe:
-                        await self.subscribe_market(market_id)
+                    for asset_id in assets_to_subscribe:
+                        await self.subscribe_assets([asset_id])
 
                 # Listen for messages
                 async for message in self.ws:

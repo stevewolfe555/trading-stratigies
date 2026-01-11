@@ -147,15 +147,17 @@ docker compose logs profile_calculator -f
 docker compose logs -f
 ```
 
-## 📚 Documentation
+## Documentation
 
-- **`docs/TIMEZONE_STRATEGY.md`** - Timezone handling guide
-- **`docs/SPEC.md`** - Original specification
+- **`docs/README.md`** - Documentation index (start here)
 - **`docs/ARCHITECTURE.md`** - System architecture
-- **`IMPLEMENTATION_STATUS.md`** - Feature tracking
+- **`docs/system/OVERVIEW.md`** - System overview
+- **`docs/system/DATA_FLOW.md`** - End-to-end data flow
+- **`docs/trading/TUNING_PLAYBOOK.md`** - How to tune/improve trading performance
+- **`docs/TIMEZONE_STRATEGY.md`** - Timezone handling guide
 - **`README.md`** - Getting started guide
 
-## 🚀 Next Steps
+## Next Steps
 
 ### Immediate (This Week)
 1. **Backtesting framework** - Test strategy on historical data
